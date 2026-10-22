@@ -221,7 +221,6 @@ PUBLIC_NODE_FEEDS = [
     "https://ghproxy.net/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://gh-proxy.com/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
-    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
     "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/v2ray-base64.txt",
     "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
 ]
@@ -258,7 +257,7 @@ def extract_proxy_uris(body):
         candidate = line if line.lower().startswith(SUPPORTED_NODE_SCHEMES) else line.split("#", 1)[0]
         if candidate.lower().startswith(SUPPORTED_NODE_SCHEMES) and len(candidate) <= 8192:
             found.append(candidate)
-    if not found and len(body) <= 8_000_000:
+    if not found and len(body) <= MAX_FEED_BYTES:
         compact = "".join(body.split())
         if re.fullmatch(r"[A-Za-z0-9_+/=-]+", compact or ""):
             try:
