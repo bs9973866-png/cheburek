@@ -45,12 +45,39 @@ class ProfileTests(unittest.TestCase):
         }
         config, imported = parse_uri(__import__("json").dumps(source))
         self.assertTrue(imported)
-        ready = make_routing_config(config, ["OpenAI / Codex", "YouTube"], "example.net")
+        ready = make_routing_config(
+            config, ["OpenAI / Codex", "YouTube"], "example.net",
+            "Только выбранные домены (TUN)"
+        )
         self.assertEqual(ready["route"]["final"], "direct")
-        self.assertEqual(ready["inbounds"][0]["type"], "mixed")
-        self.assertEqual(ready["route"]["rules"][0]["outbound"], "primary")
-        self.assertIn("youtube.com", ready["route"]["rules"][1]["domain_suffix"])
-        self.assertIn("example.net", ready["route"]["rules"][2]["domain_suffix"])
+        self.assertEqual(ready["inbounds"][0]["type"], "tun")
+        self.assertEqual(ready["inbounds"][1]["type"], "mixed")
+        self.assertTrue(any(rule.get("action") == "sniff" for rule in ready["route"]["rules"]))
+        proxy_rules = [rule for rule in ready["route"]["rules"] if rule.get("outbound") == "primary"]
+        self.assertTrue(any("youtube.com" in rule.get("domain_suffix", []) for rule in proxy_rules))
+        self.assertTrue(any("example.net" in rule.get("domain_suffix", []) for rule in proxy_rules))
+
+    def test_full_tunnel_sends_all_non_lan_traffic_to_proxy(self):
+        source = {
+            "outbounds": [
+                {"type": "vless", "tag": "main-proxy", "server": "proxy.example", "server_port": 443,
+                 "uuid": "11111111-1111-4111-8111-111111111111"},
+                {"type": "direct", "tag": "direct"}
+            ],
+            "inbounds": [],
+            "route": {"rules": []}
+        }
+        ready = make_routing_config(source, [], "", "Весь трафик (TUN)")
+        self.assertEqual(ready["route"]["final"], "main-proxy")
+        self.assertEqual(ready["inbounds"][0]["type"], "tun")
+        self.assertTrue(any(rule.get("ip_is_private") for rule in ready["route"]["rules"]))
+
+    def test_service_catalog_has_large_deduplicated_domain_coverage(self):
+        from app import SERVICES
+        domains = [d for values in SERVICES.values() for d in values]
+        self.assertGreaterEqual(len(set(domains)), 250)
+        self.assertTrue(any("web.whatsapp.com" in values for values in SERVICES.values()))
+        self.assertTrue(any("telegram.org" in values for values in SERVICES.values()))
 
     def test_auto_discovery_probe_routes_through_selected_proxy(self):
         source = {
