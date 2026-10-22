@@ -662,6 +662,16 @@ class CheburekApp:
         self._save_state()
         self.root.update_idletasks()
 
+    def select_all_services(self):
+        for variable in self.service_vars.values():
+            variable.set(True)
+        self._save_state()
+
+    def clear_all_services(self):
+        for variable in self.service_vars.values():
+            variable.set(False)
+        self._save_state()
+
     def _restore_ui_state(self):
         state = self.saved_state or {}
         profile = state.get("profile", "")
@@ -1132,32 +1142,94 @@ class CheburekApp:
         if self.busy or self.process:
             return
         if not CORE.exists():
-            messagebox.showinfo("Нужно ядро", "Сначала нажми «Установить sing-box».")
+            messagebox.showinfo("Нужно ядро", "Встроенное ядро не найдено. Открой «Ещё» и выбери sing-box.exe.")
+            return
+        mode = self.mode_var.get()
+        if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)") and not is_admin():
+            if messagebox.askyesno(
+                "Нужны права администратора",
+                "Режим TUN маршрутизирует трафик всех приложений и требует разрешения Windows на создание сетевого интерфейса. Перезапустить Cheburek от имени администратора?"
+            ):
+                self.restart_as_admin()
             return
         raw = self.editor.get("1.0", "end").strip()
         selected = [name for name, var in self.service_vars.items() if var.get()]
         custom_domains = self.custom_entry.get().strip()
-        if not selected and not custom_domains:
-            messagebox.showwarning("Нет правил", "Выбери хотя бы один сервис или введи свои домены.")
+        if not selected and not custom_domains and mode != "Весь трафик (TUN)":
+            messagebox.showwarning("Нет правил", "Выбери категорию доменов или введи свои домены. В режиме «Весь трафик» список категорий не обязателен.")
             return
+        self._save_state()
         self.busy = True
         self.connect_btn.configure(state="disabled")
         self.set_status("Проверка профиля…", "#ffcf70")
-        threading.Thread(target=self._connect_worker, args=(raw, selected, custom_domains), daemon=True).start()
+        threading.Thread(target=self._connect_worker, args=(raw, selected, custom_domains, mode), daemon=True).start()
 
-    def _connect_worker(self, raw, selected, custom_domains):
+    def _probe_running_proxy(self):
+        proxies = {
+            "http": f"http://127.0.0.1:{MIXED_PORT}",
+            "https": f"http://127.0.0.1:{MIXED_PORT}",
+        }
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+        errors = []
+        targets = (
+            "https://cp.cloudflare.com/generate_204",
+            "https://example.com/",
+            "https://www.google.com/generate_204",
+        )
+        for target in targets:
+            try:
+                request = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/2.0"})
+                with opener.open(request, timeout=7) as response:
+                    if 200 <= response.status < 400:
+                        return target
+                    errors.append(f"{target}: HTTP {response.status}")
+            except Exception as exc:
+                errors.append(f"{target}: {exc}")
+        raise RuntimeError(
+            "Локальный прокси запустился, но ни одна HTTPS-проверка не прошла через внешний узел. "
+            "Сервер может быть отключён, не поддерживать этот трафик или блокировать тестовые сайты.\n\n"
+            + "\n".join(errors[-3:])
+            + "\n\nПопробуй «Автоподбор узла» или другой профиль. Программа не будет отмечать соединение успешным без этой проверки."
+        )
+
+    def test_connection(self):
+        if not self.process or self.process.poll() is not None:
+            messagebox.showinfo("Нет подключения", "Сначала подключись к узлу.")
+            return
+        self.set_status("Проверяю внешний узел…", "#ffcf70")
+        self.test_btn.configure(state="disabled")
+        threading.Thread(target=self._test_connection_worker, daemon=True).start()
+
+    def _test_connection_worker(self):
+        try:
+            target = self._probe_running_proxy()
+            self.root.after(0, lambda t=target: self._test_connection_done(t, None))
+        except Exception as exc:
+            error = str(exc)
+            self.root.after(0, lambda e=error: self._test_connection_done(None, e))
+
+    def _test_connection_done(self, target, error):
+        self.test_btn.configure(state="normal")
+        if error:
+            self.set_status("Проверка не прошла", ACCENT)
+            messagebox.showerror("Проверка соединения", error)
+        else:
+            self.set_status("Подключено • HTTPS OK", GREEN)
+            messagebox.showinfo("Проверка успешна", f"Внешний узел ответил через прокси:\n{target}")
+
+    def _connect_worker(self, raw, selected, custom_domains, mode):
         try:
             data, already_json = parse_uri(raw)
-            config = make_routing_config(data, selected, custom_domains)
+            config = make_routing_config(data, selected, custom_domains, mode)
             CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
             check = subprocess.run([str(CORE), "check", "-c", str(CONFIG_PATH)],
                                    capture_output=True, text=True, timeout=30,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if check.returncode != 0:
                 detail = (check.stderr or check.stdout or "sing-box check не прошёл").strip()
-                raise RuntimeError("Проверка sing-box не прошла:\n" + detail[-1800:])
+                raise RuntimeError("sing-box отклонил профиль:\n" + detail[-2200:])
             with open(LOG_PATH, "a", encoding="utf-8") as log_file:
-                log_file.write("\n--- Cheburek start " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n")
+                log_file.write("\n--- Cheburek start " + time.strftime("%Y-%m-%d %H:%M:%S") + f" mode={mode} ---\n")
             log_file = open(LOG_PATH, "a", encoding="utf-8")
             self.process = subprocess.Popen([str(CORE), "run", "-c", str(CONFIG_PATH)],
                                             stdout=log_file, stderr=subprocess.STDOUT,
@@ -1166,7 +1238,12 @@ class CheburekApp:
             ready = False
             for _ in range(50):
                 if self.process.poll() is not None:
-                    raise RuntimeError("sing-box завершился сразу после запуска. Открой лог и проверь профиль.")
+                    detail = ""
+                    try:
+                        detail = "\n".join(LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()[-18:])
+                    except Exception:
+                        pass
+                    raise RuntimeError("sing-box завершился сразу после запуска.\n\n" + detail[-1800:])
                 try:
                     with socket.create_connection(("127.0.0.1", MIXED_PORT), timeout=0.3):
                         ready = True
@@ -1174,30 +1251,34 @@ class CheburekApp:
                 except OSError:
                     time.sleep(0.2)
             if not ready:
-                raise RuntimeError("Локальный прокси не открыл порт 2080 за 10 секунд. Проверь лог sing-box.")
-            if self.use_system_proxy.get():
+                raise RuntimeError("Локальный прокси не открыл порт 2080 за 10 секунд. Открой папку логов.")
+            # Do not report success until an external HTTPS request has passed through the selected outbound.
+            tested_target = self._probe_running_proxy()
+            if mode == "Системный прокси (браузеры)" and self.use_system_proxy.get():
                 self._enable_system_proxy()
-            self.root.after(0, self._connected)
+            self.root.after(0, lambda m=mode, target=tested_target: self._connected(m, target))
         except Exception as exc:
             self._stop_process_silent()
             err = str(exc)
             self.root.after(0, lambda e=err: self._connect_failed(e))
 
-    def _enable_system_proxy(self):
-        before = get_registry_values()
-        if not BACKUP_PATH.exists():
-            BACKUP_PATH.write_text(json.dumps(before), encoding="utf-8")
-        write_registry_values({"ProxyEnable": 1, "ProxyServer": f"127.0.0.1:{MIXED_PORT}",
-                               "ProxyOverride": "<local>;localhost;127.*"})
-        self.proxy_changed = True
-
-    def _connected(self):
+    def _connected(self, mode, tested_target):
         self.busy = False
         self.connect_btn.configure(state="disabled")
         self.disconnect_btn.configure(state="normal")
-        self.set_status("Подключено", GREEN)
-        self.profile_var.set(f"Активен локальный прокси 127.0.0.1:{MIXED_PORT}")
-        messagebox.showinfo("Подключено", "Прокси запущен. Выбранные домены направляются через прокси-профиль, остальные — напрямую.\n\nПриложения, игнорирующие системный прокси, нужно настроить отдельно.")
+        self.test_btn.configure(state="normal")
+        self.set_status("Подключено • HTTPS OK", GREEN)
+        self.profile_var.set(f"Узел отвечает • проверка: {urllib.parse.urlparse(tested_target).netloc}")
+        if mode == "Весь трафик (TUN)":
+            detail = "TUN включён: внешний трафик приложений направляется через прокси. Локальные сети оставлены доступными."
+        elif mode == "Только выбранные домены (TUN)":
+            detail = "TUN включён: домены выбранных категорий маршрутизируются через прокси, остальные соединения идут напрямую."
+        elif self.use_system_proxy.get():
+            detail = "Системный прокси Windows включён: приложения, которые используют настройки Windows, смогут работать через выбранные домены."
+        else:
+            detail = "Прокси работает на 127.0.0.1:2080. Системный прокси Windows выключен; настрой его в приложении или включи соответствующий флажок."
+        messagebox.showinfo("Подключено", detail + f"\n\nВнешняя HTTPS-проверка прошла через узел: {urllib.parse.urlparse(tested_target).netloc}")
+
     def _connect_failed(self, error):
         self.busy = False
         self.connect_btn.configure(state="normal")
