@@ -857,6 +857,8 @@ class CheburekApp:
         self.connect_btn.pack(side="left")
         self.disconnect_btn = ttk.Button(controls, text="Отключить", command=self.disconnect, state="disabled")
         self.disconnect_btn.pack(side="left", padx=(8, 0))
+        self.test_btn = ttk.Button(controls, text="Проверить интернет", command=self.test_connection, state="disabled")
+        self.test_btn.pack(side="left", padx=(8, 0))
         ttk.Button(controls, text="Открыть папку логов", command=self.open_logs).pack(side="right")
 
         footer = tk.Frame(self.root, bg=BG)
@@ -1312,6 +1314,7 @@ class CheburekApp:
         self.disconnect_btn.configure(state="disabled")
         self.set_status("Отключено", MUTED)
         self.profile_var.set("Подключение остановлено")
+        self._save_state()
 
     def open_logs(self):
         ensure_app_dir()
@@ -1322,6 +1325,7 @@ class CheburekApp:
             messagebox.showinfo("Папка приложения", str(target))
 
     def on_close(self):
+        self._save_state()
         self.disconnect()
         self.root.destroy()
 
