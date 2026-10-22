@@ -114,7 +114,7 @@ SERVICES = {
         "microsoft.com", "microsoftonline.com", "live.com", "bing.com", "bing.net",
         "copilot.microsoft.com", "copilot.com", "office.com", "office.net", "outlook.com",
         "windows.net", "azure.com", "azureedge.net", "azurefd.net", "msauth.net", "msftauth.net",
-        "msidentity.com", "xbox.com", "xboxlive.com", " xboxservices.com", "skype.com",
+        "msidentity.com", "xbox.com", "xboxlive.com", "xboxservices.com", "skype.com",
         "teams.microsoft.com", "teams.live.com", "sharepoint.com", "onedrive.live.com",
         "1drv.com", "sfx.ms", "visualstudio.com", "aka.ms"
     ],
@@ -1164,7 +1164,8 @@ class CheburekApp:
         self.busy = True
         self.connect_btn.configure(state="disabled")
         self.set_status("Проверка профиля…", "#ffcf70")
-        threading.Thread(target=self._connect_worker, args=(raw, selected, custom_domains, mode), daemon=True).start()
+        use_system_proxy = self.use_system_proxy.get()
+        threading.Thread(target=self._connect_worker, args=(raw, selected, custom_domains, mode, use_system_proxy), daemon=True).start()
 
     def _probe_running_proxy(self):
         proxies = {
@@ -1219,7 +1220,7 @@ class CheburekApp:
             self.set_status("Подключено • HTTPS OK", GREEN)
             messagebox.showinfo("Проверка успешна", f"Внешний узел ответил через прокси:\n{target}")
 
-    def _connect_worker(self, raw, selected, custom_domains, mode):
+    def _connect_worker(self, raw, selected, custom_domains, mode, use_system_proxy):
         try:
             data, already_json = parse_uri(raw)
             config = make_routing_config(data, selected, custom_domains, mode)
@@ -1256,7 +1257,7 @@ class CheburekApp:
                 raise RuntimeError("Локальный прокси не открыл порт 2080 за 10 секунд. Открой папку логов.")
             # Do not report success until an external HTTPS request has passed through the selected outbound.
             tested_target = self._probe_running_proxy()
-            if mode == "Системный прокси (браузеры)" and self.use_system_proxy.get():
+            if mode == "Системный прокси (браузеры)" and use_system_proxy:
                 self._enable_system_proxy()
             self.root.after(0, lambda m=mode, target=tested_target: self._connected(m, target))
         except Exception as exc:
@@ -1285,6 +1286,7 @@ class CheburekApp:
         self.busy = False
         self.connect_btn.configure(state="normal")
         self.disconnect_btn.configure(state="disabled")
+        self.test_btn.configure(state="disabled")
         self.set_status("Ошибка подключения", ACCENT)
         messagebox.showerror("Не удалось подключиться", error)
 
@@ -1312,6 +1314,7 @@ class CheburekApp:
             self.proxy_changed = False
         self.connect_btn.configure(state="normal")
         self.disconnect_btn.configure(state="disabled")
+        self.test_btn.configure(state="disabled")
         self.set_status("Отключено", MUTED)
         self.profile_var.set("Подключение остановлено")
         self._save_state()
