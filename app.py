@@ -21,6 +21,7 @@ APP_NAME = "Cheburek Access"
 APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CheburekAccess"
 BIN_DIR = APP_DIR / "bin"
 CORE = BIN_DIR / "sing-box.exe"
+BUNDLED_CORE = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)) / "sing-box.exe"
 CONFIG_PATH = APP_DIR / "active-config.json"
 LOG_PATH = APP_DIR / "sing-box.log"
 BACKUP_PATH = APP_DIR / "proxy-backup.json"
@@ -235,6 +236,13 @@ def ensure_app_dir():
     BIN_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def ensure_core_available():
+    """Install the build-bundled sing-box core into the per-user app directory."""
+    ensure_app_dir()
+    if not CORE.exists() and BUNDLED_CORE.is_file():
+        shutil.copy2(BUNDLED_CORE, CORE)
+
+
 def get_registry_values():
     import winreg
     key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
@@ -289,6 +297,7 @@ class CheburekApp:
     def __init__(self, root):
         self.root = root
         ensure_app_dir()
+        ensure_core_available()
         restore_if_stale()
         self.process = None
         self.proxy_changed = False
@@ -384,8 +393,9 @@ class CheburekApp:
         tools = tk.Frame(right, bg=PANEL)
         tools.pack(fill="x", padx=16, pady=(0, 8))
         ttk.Button(tools, text="Импорт JSON", command=self.import_json).pack(side="left")
+        ttk.Button(tools, text="Выбрать sing-box.exe", command=self.import_core_file).pack(side="left", padx=(7, 0))
         ttk.Button(tools, text="Очистить", command=self.clear_input).pack(side="left", padx=(7, 0))
-        ttk.Button(tools, text="Установить sing-box", command=self.install_core).pack(side="right")
+        ttk.Button(tools, text="Скачать ядро", command=self.install_core).pack(side="right")
 
         editor_frame = tk.Frame(right, bg=PANEL_2, highlightbackground=BORDER, highlightthickness=1)
         editor_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
@@ -457,6 +467,27 @@ class CheburekApp:
         self.loaded_path = ""
         self.profile_var.set("Профиль не загружен")
 
+    def import_core_file(self):
+        path = filedialog.askopenfilename(
+            title="Выбрать sing-box.exe",
+            filetypes=[("sing-box executable", "sing-box.exe"), ("Executable files", "*.exe"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            result = subprocess.run([path, "version"], capture_output=True, text=True, timeout=10,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            output = (result.stdout or result.stderr or "").strip()
+            if result.returncode != 0 or "sing-box" not in output.lower():
+                raise ValueError("Выбранный файл не прошёл проверку команды 'sing-box version'.")
+            ensure_app_dir()
+            shutil.copy2(path, CORE)
+            self.set_status("Ядро импортировано", GREEN)
+            self.profile_var.set("Ядро импортировано: " + Path(path).name)
+            messagebox.showinfo("Готово", "sing-box установлен локально. Для этой операции доступ к GitHub не нужен.")
+        except Exception as exc:
+            messagebox.showerror("Не удалось импортировать ядро", str(exc))
+
     def install_core(self):
         if self.busy:
             return
@@ -508,8 +539,11 @@ class CheburekApp:
     def _core_failed(self, error):
         self.busy = False
         self.connect_btn.configure(state="normal")
-        self.set_status("Не удалось установить", ACCENT)
-        messagebox.showerror("Ошибка установки", error + "\n\nСкачивание возможно блокируется сетью. Проверь подключение к GitHub.")
+        self.set_status("Не удалось скачать ядро", ACCENT)
+        messagebox.showerror(
+            "Ошибка установки",
+            error + "\n\nНовая версия Cheburek включает sing-box внутри EXE. Если ты видишь это окно, используй обновлённую сборку; либо скачай sing-box с официальной страницы https://github.com/SagerNet/sing-box/releases, распакуй архив и нажми «Выбрать sing-box.exe»."
+        )
 
     def connect(self):
         if self.busy or self.process:
