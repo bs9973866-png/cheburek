@@ -27,7 +27,17 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(outbound["tls"]["server_name"], "cdn.example.org")
         self.assertEqual(outbound["transport"]["type"], "ws")
 
-    def test_trojan_uri(self):
+    def test_hysteria2_uri(self):
+        config, imported = parse_uri(
+            "hy2://my-password@example.org:443?insecure=1&sni=example.org#hy2-test"
+        )
+        self.assertFalse(imported)
+        outbound = config["outbounds"][0]
+        self.assertEqual(outbound["type"], "hysteria2")
+        self.assertEqual(outbound["password"], "my-password")
+        self.assertTrue(outbound["tls"]["insecure"])
+
+    def test_hysteria2_uri(self):
         config, imported = parse_uri("trojan://secret@example.org:443?sni=example.org")
         self.assertFalse(imported)
         self.assertEqual(config["outbounds"][0]["type"], "trojan")
