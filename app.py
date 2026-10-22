@@ -602,6 +602,102 @@ class CheburekApp:
         style.configure("TCombobox", fieldbackground=PANEL_2, foreground=FG, padding=6)
         style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL_2, bordercolor=PANEL_2)
 
+    def _set_global_theme(self, name):
+        global BG, PANEL, PANEL_2, FG, MUTED, ACCENT, GREEN, BORDER
+        palette = THEMES.get(name, THEMES["Neon Pink"])
+        BG = palette["bg"]
+        PANEL = palette["panel"]
+        PANEL_2 = palette["panel2"]
+        FG = palette["fg"]
+        MUTED = palette["muted"]
+        ACCENT = palette["accent"]
+        GREEN = palette["green"]
+        BORDER = palette["border"]
+
+    def apply_theme(self, selected=None, initial=False):
+        selected = selected or self.theme_var.get()
+        old = {"bg": BG, "panel": PANEL, "panel2": PANEL_2, "fg": FG,
+               "muted": MUTED, "accent": ACCENT, "green": GREEN, "border": BORDER}
+        self.theme_var.set(selected if selected in THEMES else "Neon Pink")
+        self._set_global_theme(self.theme_var.get())
+        palette_map = {
+            old["bg"]: BG, old["panel"]: PANEL, old["panel2"]: PANEL_2,
+            old["fg"]: FG, old["muted"]: MUTED, old["accent"]: ACCENT,
+            old["green"]: GREEN, old["border"]: BORDER,
+            "#271920": PANEL, "#63303e": BORDER, "#ff9eac": ACCENT,
+            "#f4dfe3": FG, "#343a48": BORDER, "#242831": PANEL_2,
+            "#777d8c": MUTED,
+        }
+        self._style()
+        if not initial:
+            def recolor(widget):
+                for opt in ("background", "bg", "foreground", "fg", "highlightbackground",
+                            "insertbackground", "selectbackground", "troughcolor", "bordercolor"):
+                    try:
+                        value = widget.cget(opt)
+                        if isinstance(value, str) and value.lower() in palette_map:
+                            widget.configure(**{opt: palette_map[value.lower()]})
+                    except Exception:
+                        pass
+                for child in widget.winfo_children():
+                    recolor(child)
+            recolor(self.root)
+        try:
+            self.status_pill.configure(bg=PANEL_2)
+        except Exception:
+            pass
+        self._save_state()
+        self.root.update_idletasks()
+
+    def _restore_ui_state(self):
+        state = self.saved_state or {}
+        profile = state.get("profile", "")
+        if profile:
+            self.editor.delete("1.0", "end")
+            self.editor.insert("1.0", profile)
+            self.profile_var.set(state.get("profile_label", "Профиль восстановлен локально"))
+        domains = state.get("custom_domains", "")
+        if domains:
+            self.custom_entry.insert(0, domains)
+        if state.get("loaded_path"):
+            self.loaded_path = state["loaded_path"]
+
+    def _save_state(self):
+        try:
+            state = {
+                "profile": self.editor.get("1.0", "end").strip() if hasattr(self, "editor") else "",
+                "profile_label": self.profile_var.get() if hasattr(self, "profile_var") else "",
+                "custom_domains": self.custom_entry.get().strip() if hasattr(self, "custom_entry") else "",
+                "mode": self.mode_var.get() if hasattr(self, "mode_var") else "Весь трафик (TUN)",
+                "theme": self.theme_var.get() if hasattr(self, "theme_var") else "Neon Pink",
+                "use_system_proxy": self.use_system_proxy.get() if hasattr(self, "use_system_proxy") else True,
+                "selected_services": [name for name, var in self.service_vars.items() if var.get()],
+                "loaded_path": self.loaded_path,
+            }
+            self.state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def restart_as_admin(self):
+        self._save_state()
+        try:
+            if getattr(sys, "frozen", False):
+                executable = sys.executable
+                params = "--restore-admin"
+            else:
+                executable = sys.executable
+                params = subprocess.list2cmdline([str(Path(__file__).resolve()), "--restore-admin"])
+            result = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", executable, params, str(Path.cwd()), 1
+            )
+            if result > 32:
+                self.root.after(150, self.root.destroy)
+                return
+            messagebox.showerror("Не удалось запустить с правами администратора",
+                                 "Windows не запустила повышенный процесс. Попробуй закрыть программу и открыть её через «Запуск от имени администратора».")
+        except Exception as exc:
+            messagebox.showerror("Ошибка UAC", str(exc))
+
     def _build(self):
         header = tk.Frame(self.root, bg=BG)
         header.pack(fill="x", padx=22, pady=(18, 12))
