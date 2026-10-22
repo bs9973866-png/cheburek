@@ -329,7 +329,8 @@ def parse_uri(raw):
     parsed = urllib.parse.urlsplit(raw)
     q = url_query(parsed)
     host, port = parsed.hostname, parsed.port
-    if not host or not port:
+    # SIP002 Shadowsocks can encode the entire method:password@host:port authority in base64.
+    if (not host or not port) and scheme != "ss":
         raise ValueError("В ссылке должны быть указаны адрес сервера и порт.")
 
     if scheme in ("hy2", "hysteria2"):
