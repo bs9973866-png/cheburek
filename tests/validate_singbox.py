@@ -35,7 +35,7 @@ def main():
             result = subprocess.run([core, 'check', '-c', str(path)], capture_output=True, text=True, timeout=30)
             if result.returncode:
                 raise SystemExit(f'Config validation failed for mode {mode}:\n{result.stderr}\n{result.stdout}')
-            print(f'OK: {mode}')
+            print(f'OK: route configuration #{index + 1}')
 
 
 if __name__ == '__main__':
