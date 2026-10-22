@@ -9,6 +9,7 @@ on:
       - "README.md"
       - "tests/**"
       - "assets/**"
+      - "scripts/**"
       - ".github/workflows/windows-build.yml"
   workflow_dispatch:
 
@@ -49,6 +50,23 @@ jobs:
 
       - name: Validate generated configs against sing-box
         run: python tests/validate_singbox.py sing-box.exe
+
+      - name: Download and create curated public profile
+        shell: pwsh
+        run: |
+          $profileUrl = "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json"
+          $sourcePath = Join-Path $env:RUNNER_TEMP "source-singbox.json"
+          Invoke-WebRequest -Uri $profileUrl -Headers @{ "User-Agent" = "CheburekAccess-Builder" } -OutFile $sourcePath
+          python scripts/build_public_profile.py $sourcePath profiles/Cheburek-Public-Auto.json
+          python -c "import json; d=json.load(open('profiles/Cheburek-Public-Auto.json', encoding='utf-8')); print('profile config generated; outbounds:', len(d['outbounds']))"
+          .\sing-box.exe check -c profiles/Cheburek-Public-Auto.json
+
+      - name: Upload public JSON profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cheburek-Public-Auto-Profile
+          path: profiles/Cheburek-Public-Auto.json
+          if-no-files-found: error
 
       - name: Generate icon assets and build self-contained executable
         run: |
