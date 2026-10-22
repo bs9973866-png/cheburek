@@ -34,19 +34,13 @@ jobs:
       - name: Download and verify sing-box core
         shell: pwsh
         run: |
-          $headers = @{ "User-Agent" = "CheburekAccess-Builder"; "Accept" = "application/vnd.github+json" }
-          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/SagerNet/sing-box/releases/latest" -Headers $headers
-          $asset = $release.assets | Where-Object { $_.name -match "windows-amd64\.zip$" } | Select-Object -First 1
-          if ($null -eq $asset) { throw "No stable sing-box Windows amd64 archive was found." }
-
+          $downloadUrl = "https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-windows-amd64.zip"
+          $expected = "d8b86ef58936dba9230ec6a57ffa4243933f3c14ef4809828b6c553440ed1518"
           $zipPath = Join-Path $env:RUNNER_TEMP "sing-box.zip"
           $extractDir = Join-Path $env:RUNNER_TEMP "sing-box-extracted"
-          Invoke-WebRequest -Uri $asset.browser_download_url -Headers @{ "User-Agent" = "CheburekAccess-Builder" } -OutFile $zipPath
-          if ($asset.digest -and $asset.digest.StartsWith("sha256:")) {
-            $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-            $expected = $asset.digest.Substring(7).ToLowerInvariant()
-            if ($actual -ne $expected) { throw "sing-box archive SHA-256 verification failed." }
-          }
+          Invoke-WebRequest -Uri $downloadUrl -Headers @{ "User-Agent" = "CheburekAccess-Builder" } -OutFile $zipPath
+          $actual = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "sing-box archive SHA-256 verification failed." }
           Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir -Force
           $core = Get-ChildItem -Path $extractDir -Filter "sing-box.exe" -Recurse | Select-Object -First 1
           if ($null -eq $core) { throw "sing-box.exe was not found in the official archive." }
