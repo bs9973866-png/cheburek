@@ -211,6 +211,10 @@ PUBLIC_PROFILE_FEEDS = [
 PUBLIC_NODE_FEEDS = [
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/all.txt",
+    "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/all.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/all-base64.txt",
+    "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/all-base64.txt",
     "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://ghproxy.net/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://gh-proxy.com/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
@@ -219,7 +223,7 @@ PUBLIC_NODE_FEEDS = [
     "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/v2ray-base64.txt",
     "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
 ]
-SUPPORTED_NODE_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+SUPPORTED_NODE_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://", "hy2://", "hysteria2://")
 PROBE_CONFIG_PATH = APP_DIR / "probe-config.json"
 AUTO_PROFILE_PATH = APP_DIR / "auto-profile.json"
 AUTO_PROFILE_TOKEN = "::CHEBUREK_AUTO_PROFILE::"
@@ -325,6 +329,34 @@ def parse_uri(raw):
     host, port = parsed.hostname, parsed.port
     if not host or not port:
         raise ValueError("В ссылке должны быть указаны адрес сервера и порт.")
+
+    if scheme in ("hy2", "hysteria2"):
+        password = urllib.parse.unquote(parsed.username or parsed.password or "")
+        if not password:
+            raise ValueError("В Hysteria2-ссылке не найден пароль.")
+        tls = {
+            "enabled": True,
+            "server_name": q.get("sni") or q.get("peer") or host,
+        }
+        if q.get("insecure", q.get("allowInsecure", "0")).lower() in ("1", "true", "yes"):
+            tls["insecure"] = True
+        if q.get("alpn"):
+            tls["alpn"] = q["alpn"].split(",")
+        outbound = {
+            "type": "hysteria2",
+            "tag": "proxy",
+            "server": host,
+            "server_port": port,
+            "password": password,
+            "tls": tls
+        }
+        obfs_type = q.get("obfs")
+        obfs_password = q.get("obfs-password") or q.get("obfs_password")
+        if obfs_type and obfs_type.lower() not in ("", "none"):
+            if not obfs_password:
+                raise ValueError("В Hysteria2-ссылке задан obfs, но не задан obfs-password.")
+            outbound["obfs"] = {"type": obfs_type, "password": obfs_password}
+        return {"outbounds": [outbound]}, False
 
     if scheme == "vless":
         uid = urllib.parse.unquote(parsed.username or "")
@@ -1164,7 +1196,7 @@ class CheburekApp:
                             profile_candidates.append(item)
                     elif item not in uri_candidates:
                         uri_candidates.append(item)
-                if len(uri_candidates) >= 300:
+                if len(uri_candidates) >= 5000:
                     break
             except Exception as exc:
                 errors.append(f"{urllib.parse.urlparse(source).netloc}: {exc}")
