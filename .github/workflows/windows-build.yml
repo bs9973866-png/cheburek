@@ -52,7 +52,7 @@ jobs:
 
       - name: Generate icon assets and build self-contained executable
         run: |
-          python -m pip install --upgrade pip pyinstaller pillow cairosvg
+          python -m pip install --upgrade pip pyinstaller pillow
           python assets/generate_assets.py
           pyinstaller --noconfirm --clean --onefile --windowed --name CheburekAccess --icon assets/cheburek.ico --add-binary "sing-box.exe;." --add-data "assets/cheburek.png;assets" app.py
 
