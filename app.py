@@ -301,7 +301,13 @@ def parse_uri(raw):
         if str(d.get("tls", "")).lower() == "tls":
             outbound["tls"] = {"enabled": True, "server_name": d.get("sni") or d.get("host") or server,
                                "utls": {"enabled": True, "fingerprint": "chrome"}}
+            if str(d.get("allowInsecure", "false")).lower() in ("1", "true", "yes"):
+                outbound["tls"]["insecure"] = True
         net = str(d.get("net", "tcp")).lower()
+        if net in ("xhttp", "splithttp"):
+            raise ValueError("Этот VMess узел использует XHTTP, которого нет в официальном sing-box; пробую следующий.")
+        if net not in ("tcp", "raw", "ws", "grpc"):
+            raise ValueError(f"Неподдерживаемый VMess транспорт {net}; пропускаю этот узел.")
         if net == "ws":
             outbound["transport"] = {"type": "ws", "path": d.get("path") or "/"}
             if d.get("host"):
@@ -328,6 +334,8 @@ def parse_uri(raw):
         if security in ("tls", "reality"):
             tls = {"enabled": True, "server_name": q.get("sni") or q.get("serverName") or host,
                    "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}
+            if q.get("allowInsecure", "").lower() in ("1", "true", "yes"):
+                tls["insecure"] = True
             if q.get("alpn"):
                 tls["alpn"] = q["alpn"].split(",")
             if security == "reality":
@@ -348,32 +356,40 @@ def parse_uri(raw):
                "password": password, "tls": {"enabled": q.get("security", "tls") != "none",
                                               "server_name": q.get("sni") or q.get("peer") or host,
                                               "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}}
+        if q.get("allowInsecure", "").lower() in ("1", "true", "yes"):
+            out["tls"]["insecure"] = True
         add_transport(out, q)
         return {"outbounds": [out]}, False
 
     if scheme == "ss":
-        user = urllib.parse.unquote(parsed.username or "")
-        try:
-            if ":" not in user:
-                token = user + "=" * ((4 - len(user) % 4) % 4)
-                user = base64.urlsafe_b64decode(token).decode("utf-8")
-        except Exception:
-            pass
-        if ":" not in user:
-            # Alternative SIP002 form: ss://BASE64(method:password@host:port)
-            payload = raw.split("://", 1)[1].split("#", 1)[0]
-            payload = urllib.parse.unquote(payload)
-            payload += "=" * ((4 - len(payload) % 4) % 4)
+        # SIP002 format: ss://method:password@host:port, optionally percent-encoded.
+        parsed_user = urllib.parse.unquote(parsed.username or "")
+        parsed_password = urllib.parse.unquote(parsed.password or "")
+        if host and port and parsed_password and ":" not in parsed_user:
+            method, password = parsed_user, parsed_password
+        else:
+            user = parsed_user
             try:
-                decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
-                p2 = urllib.parse.urlsplit("ss://" + decoded)
-                host, port = p2.hostname, p2.port
-                user = urllib.parse.unquote(p2.username or "") + ":" + urllib.parse.unquote(p2.password or "")
-            except Exception as exc:
-                raise ValueError("Не удалось разобрать Shadowsocks URI. Попробуй импорт sing-box JSON.") from exc
-        if ":" not in user:
-            raise ValueError("В SS-ссылке не распознаны method:password.")
-        method, password = user.split(":", 1)
+                if ":" not in user:
+                    token = user + "=" * ((4 - len(user) % 4) % 4)
+                    user = base64.urlsafe_b64decode(token).decode("utf-8")
+            except Exception:
+                pass
+            if ":" not in user:
+                # Alternative SIP002 form: ss://BASE64(method:password@host:port)
+                payload = raw.split("://", 1)[1].split("#", 1)[0]
+                payload = urllib.parse.unquote(payload)
+                payload += "=" * ((4 - len(payload) % 4) % 4)
+                try:
+                    decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
+                    p2 = urllib.parse.urlsplit("ss://" + decoded)
+                    host, port = p2.hostname, p2.port
+                    user = urllib.parse.unquote(p2.username or "") + ":" + urllib.parse.unquote(p2.password or "")
+                except Exception as exc:
+                    raise ValueError("Не удалось разобрать Shadowsocks URI. Попробуй импорт sing-box JSON.") from exc
+            if ":" not in user:
+                raise ValueError("В SS-ссылке не распознаны method:password.")
+            method, password = user.split(":", 1)
         out = {"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": port,
                "method": method, "password": password}
         return {"outbounds": [out]}, False
@@ -385,6 +401,9 @@ def add_transport(out, q):
     kind = q.get("type", "tcp").lower()
     path = urllib.parse.unquote(q.get("path", "/"))
     host_header = q.get("host")
+    if kind in ("tcp", "raw", ""):
+        # No special transport block means standard TCP.
+        return
     if kind == "ws":
         transport = {"type": "ws", "path": path}
         if host_header:
@@ -397,6 +416,10 @@ def add_transport(out, q):
         if host_header:
             transport["host"] = [host_header]
         out["transport"] = transport
+    elif kind in ("xhttp", "splithttp"):
+        raise ValueError("Этот узел использует XHTTP, которого нет в официальном sing-box внутри приложения; пробую следующий узел.")
+    else:
+        raise ValueError(f"Неподдерживаемый транспорт {kind}; пропускаю этот узел.")
 
 
 def proxy_tag_for(config):
@@ -421,7 +444,7 @@ def proxy_tag_for(config):
     raise ValueError("В конфиге не найден исходящий прокси (outbound).")
 
 
-def make_routing_config(data, enabled_services, custom_domains, mode="Весь трафик (TUN)"):
+def make_routing_config(data, enabled_services, custom_domains, mode="Весь трафик (TUN)", inbound_port=MIXED_PORT):
     """Build a current sing-box 1.14-compatible config for system proxy or device-wide TUN."""
     config = json.loads(json.dumps(data))
     outbounds = config.setdefault("outbounds", [])
@@ -434,7 +457,7 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
         "type": "mixed",
         "tag": "cheburek-mixed",
         "listen": "127.0.0.1",
-        "listen_port": MIXED_PORT
+        "listen_port": inbound_port
     }
     if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)"):
         config["inbounds"] = [{
@@ -494,9 +517,9 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
     return config
 
 
-def make_probe_config(data, enabled_services, custom_domains):
+def make_probe_config(data, enabled_services, custom_domains, inbound_port=MIXED_PORT):
     """Build a temporary mixed-inbound config, forcing probe destinations through the tested proxy."""
-    config = make_routing_config(data, enabled_services, custom_domains, "Системный прокси (браузеры)")
+    config = make_routing_config(data, enabled_services, custom_domains, "Системный прокси (браузеры)", inbound_port=inbound_port)
     route = config.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not isinstance(rules, list):
