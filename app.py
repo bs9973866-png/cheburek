@@ -1,0 +1,638 @@
+import base64
+import hashlib
+import json
+import os
+import queue
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+import urllib.request
+import zipfile
+from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+APP_NAME = "Cheburek Access"
+APP_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "CheburekAccess"
+BIN_DIR = APP_DIR / "bin"
+CORE = BIN_DIR / "sing-box.exe"
+CONFIG_PATH = APP_DIR / "active-config.json"
+LOG_PATH = APP_DIR / "sing-box.log"
+BACKUP_PATH = APP_DIR / "proxy-backup.json"
+MIXED_PORT = 2080
+
+SERVICES = {
+    "OpenAI / Codex": [
+        "openai.com", "chatgpt.com", "auth.openai.com", "platform.openai.com",
+        "api.openai.com", "oaistatic.com", "oaiusercontent.com"
+    ],
+    "Claude": ["claude.ai", "anthropic.com", "claudeusercontent.com"],
+    "Gemini": ["gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"],
+    "Perplexity": ["perplexity.ai"],
+    "Telegram": [
+        "telegram.org", "t.me", "telegram.me", "telegram.dog", "telegra.ph",
+        "telesco.pe", "telegram-cdn.org", "cdn-telegram.org"
+    ],
+    "WhatsApp": ["whatsapp.com", "whatsapp.net", "wa.me", "web.whatsapp.com"],
+    "YouTube": ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com"],
+}
+
+BG = "#111318"
+PANEL = "#1a1d24"
+PANEL_2 = "#20242d"
+FG = "#f2f3f7"
+MUTED = "#9ca3b4"
+ACCENT = "#ff4f64"
+GREEN = "#45d483"
+BORDER = "#343a46"
+
+
+def url_query(parsed):
+    return {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items()}
+
+
+def parse_uri(raw):
+    raw = raw.strip()
+    if not raw:
+        raise ValueError("Вставь ссылку VLESS/Trojan/SS/VMess или импортируй sing-box JSON.")
+    if raw.startswith("{"):
+        data = json.loads(raw)
+        if not isinstance(data, dict) or not isinstance(data.get("outbounds"), list):
+            raise ValueError("В JSON не найден список outbounds. Нужен профиль sing-box.")
+        return data, True
+
+    scheme = raw.split(":", 1)[0].lower()
+    if scheme == "vmess":
+        token = raw.split("://", 1)[1].split("#", 1)[0].strip()
+        token += "=" * ((4 - len(token) % 4) % 4)
+        try:
+            d = json.loads(base64.urlsafe_b64decode(token).decode("utf-8"))
+        except Exception as exc:
+            raise ValueError("Не удалось прочитать VMess-ссылку.") from exc
+        server = d.get("add")
+        port = int(d.get("port", 0))
+        uid = d.get("id")
+        if not server or not port or not uid:
+            raise ValueError("В VMess-ссылке не хватает сервера, порта или UUID.")
+        outbound = {"type": "vmess", "tag": "proxy", "server": server,
+                    "server_port": port, "uuid": uid, "alter_id": int(d.get("aid", 0)),
+                    "security": d.get("scy", "auto")}
+        if str(d.get("tls", "")).lower() == "tls":
+            outbound["tls"] = {"enabled": True, "server_name": d.get("sni") or d.get("host") or server,
+                               "utls": {"enabled": True, "fingerprint": "chrome"}}
+        net = str(d.get("net", "tcp")).lower()
+        if net == "ws":
+            outbound["transport"] = {"type": "ws", "path": d.get("path") or "/"}
+            if d.get("host"):
+                outbound["transport"]["headers"] = {"Host": d["host"]}
+        elif net == "grpc":
+            outbound["transport"] = {"type": "grpc", "service_name": d.get("path") or ""}
+        return {"outbounds": [outbound]}, False
+
+    parsed = urllib.parse.urlsplit(raw)
+    q = url_query(parsed)
+    host, port = parsed.hostname, parsed.port
+    if not host or not port:
+        raise ValueError("В ссылке должны быть указаны адрес сервера и порт.")
+
+    if scheme == "vless":
+        uid = urllib.parse.unquote(parsed.username or "")
+        if not uid:
+            raise ValueError("В VLESS-ссылке не найден UUID.")
+        out = {"type": "vless", "tag": "proxy", "server": host, "server_port": port, "uuid": uid}
+        flow = q.get("flow")
+        if flow:
+            out["flow"] = flow
+        security = q.get("security", "none").lower()
+        if security in ("tls", "reality"):
+            tls = {"enabled": True, "server_name": q.get("sni") or q.get("serverName") or host,
+                   "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}
+            if q.get("alpn"):
+                tls["alpn"] = q["alpn"].split(",")
+            if security == "reality":
+                public_key = q.get("pbk") or q.get("publicKey")
+                short_id = q.get("sid") or q.get("shortId", "")
+                if not public_key:
+                    raise ValueError("Для VLESS Reality в ссылке должен быть параметр pbk (public key).")
+                tls["reality"] = {"enabled": True, "public_key": public_key, "short_id": short_id}
+            out["tls"] = tls
+        add_transport(out, q)
+        return {"outbounds": [out]}, False
+
+    if scheme == "trojan":
+        password = urllib.parse.unquote(parsed.username or "")
+        if not password:
+            raise ValueError("В Trojan-ссылке не найден пароль.")
+        out = {"type": "trojan", "tag": "proxy", "server": host, "server_port": port,
+               "password": password, "tls": {"enabled": q.get("security", "tls") != "none",
+                                              "server_name": q.get("sni") or q.get("peer") or host,
+                                              "utls": {"enabled": True, "fingerprint": q.get("fp", "chrome")}}}
+        add_transport(out, q)
+        return {"outbounds": [out]}, False
+
+    if scheme == "ss":
+        user = urllib.parse.unquote(parsed.username or "")
+        try:
+            if ":" not in user:
+                token = user + "=" * ((4 - len(user) % 4) % 4)
+                user = base64.urlsafe_b64decode(token).decode("utf-8")
+        except Exception:
+            pass
+        if ":" not in user:
+            # Alternative SIP002 form: ss://BASE64(method:password@host:port)
+            payload = raw.split("://", 1)[1].split("#", 1)[0]
+            payload = urllib.parse.unquote(payload)
+            payload += "=" * ((4 - len(payload) % 4) % 4)
+            try:
+                decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
+                p2 = urllib.parse.urlsplit("ss://" + decoded)
+                host, port = p2.hostname, p2.port
+                user = urllib.parse.unquote(p2.username or "") + ":" + urllib.parse.unquote(p2.password or "")
+            except Exception as exc:
+                raise ValueError("Не удалось разобрать Shadowsocks URI. Попробуй импорт sing-box JSON.") from exc
+        if ":" not in user:
+            raise ValueError("В SS-ссылке не распознаны method:password.")
+        method, password = user.split(":", 1)
+        out = {"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": port,
+               "method": method, "password": password}
+        return {"outbounds": [out]}, False
+
+    raise ValueError("Поддерживаются vless://, vmess://, trojan://, ss:// и sing-box JSON.")
+
+
+def add_transport(out, q):
+    kind = q.get("type", "tcp").lower()
+    path = urllib.parse.unquote(q.get("path", "/"))
+    host_header = q.get("host")
+    if kind == "ws":
+        transport = {"type": "ws", "path": path}
+        if host_header:
+            transport["headers"] = {"Host": host_header}
+        out["transport"] = transport
+    elif kind in ("grpc", "gun"):
+        out["transport"] = {"type": "grpc", "service_name": q.get("serviceName", "")}
+    elif kind in ("httpupgrade", "http-upgrade"):
+        transport = {"type": "httpupgrade", "path": path}
+        if host_header:
+            transport["host"] = [host_header]
+        out["transport"] = transport
+
+
+def proxy_tag_for(config):
+    preferred = {"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "hysteria2", "tuic", "wireguard", "selector", "urltest"}
+    for ob in config.get("outbounds", []):
+        if ob.get("type") in preferred and ob.get("tag"):
+            return ob["tag"]
+    for ob in config.get("outbounds", []):
+        if ob.get("tag") and ob.get("type") not in {"direct", "block", "dns"}:
+            return ob["tag"]
+    raise ValueError("В конфиге не найден исходящий прокси (outbound).")
+
+
+def make_routing_config(data, enabled_services, custom_domains):
+    config = json.loads(json.dumps(data))
+    outbounds = config.setdefault("outbounds", [])
+    if not any(o.get("tag") == "direct" for o in outbounds):
+        outbounds.append({"type": "direct", "tag": "direct"})
+    proxy_tag = proxy_tag_for(config)
+    inbounds = config.setdefault("inbounds", [])
+    mixed = next((i for i in inbounds if i.get("type") == "mixed"), None)
+    if mixed is None:
+        inbounds.append({"type": "mixed", "tag": "cheburek-mixed",
+                         "listen": "127.0.0.1", "listen_port": MIXED_PORT})
+    else:
+        mixed["listen"] = "127.0.0.1"
+        mixed["listen_port"] = MIXED_PORT
+    route = config.setdefault("route", {})
+    existing = route.get("rules", [])
+    if not isinstance(existing, list):
+        existing = []
+    rules = []
+    for name in enabled_services:
+        domains = SERVICES.get(name, [])
+        if domains:
+            rules.append({"domain_suffix": domains, "outbound": proxy_tag})
+    if custom_domains:
+        domains = sorted(set(d.strip().lower().lstrip(".") for d in re.split(r"[,;\s]+", custom_domains) if d.strip()))
+        invalid = [d for d in domains if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) or ".." in d]
+        if invalid:
+            raise ValueError("Некорректный домен: " + invalid[0])
+        if domains:
+            rules.append({"domain_suffix": domains, "outbound": proxy_tag})
+    route["rules"] = rules + existing
+    route["final"] = "direct"
+    config["outbounds"] = outbounds
+    return config
+
+
+def ensure_app_dir():
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    BIN_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def get_registry_values():
+    import winreg
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    names = ("ProxyEnable", "ProxyServer", "ProxyOverride")
+    values = {}
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+        for name in names:
+            try:
+                values[name] = winreg.QueryValueEx(key, name)[0]
+            except FileNotFoundError:
+                values[name] = None
+    return values
+
+
+def write_registry_values(values):
+    import winreg
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_SET_VALUE) as key:
+        for name, value in values.items():
+            try:
+                if value is None:
+                    winreg.DeleteValue(key, name)
+                else:
+                    value_type = winreg.REG_DWORD if name == "ProxyEnable" else winreg.REG_SZ
+                    winreg.SetValueEx(key, name, 0, value_type, value)
+            except FileNotFoundError:
+                pass
+    try:
+        import ctypes
+        internet_set_option = ctypes.windll.Wininet.InternetSetOptionW
+        internet_set_option(None, 39, None, 0)  # INTERNET_OPTION_SETTINGS_CHANGED
+        internet_set_option(None, 37, None, 0)  # INTERNET_OPTION_REFRESH
+    except Exception:
+        pass
+
+
+def restore_if_stale():
+    if not BACKUP_PATH.exists():
+        return
+    try:
+        backup = json.loads(BACKUP_PATH.read_text(encoding="utf-8"))
+        current = get_registry_values()
+        proxy_server = str(current.get("ProxyServer") or "")
+        if "127.0.0.1:2080" in proxy_server or "localhost:2080" in proxy_server:
+            write_registry_values(backup)
+        BACKUP_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+class CheburekApp:
+    def __init__(self, root):
+        self.root = root
+        ensure_app_dir()
+        restore_if_stale()
+        self.process = None
+        self.proxy_changed = False
+        self.loaded_path = ""
+        self.busy = False
+        self.status_var = tk.StringVar(value="Отключено")
+        self.profile_var = tk.StringVar(value="Профиль не загружен")
+        self.use_system_proxy = tk.BooleanVar(value=True)
+        self.service_vars = {name: tk.BooleanVar(value=True) for name in SERVICES}
+        self._style()
+        self._build()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.after(400, self.refresh_core_state)
+
+    def _style(self):
+        self.root.title(APP_NAME)
+        self.root.geometry("1040x780")
+        self.root.minsize(900, 690)
+        self.root.configure(bg=BG)
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("TFrame", background=BG)
+        style.configure("Card.TFrame", background=PANEL)
+        style.configure("TLabel", background=BG, foreground=FG, font=("Segoe UI", 10))
+        style.configure("Card.TLabel", background=PANEL, foreground=FG, font=("Segoe UI", 10))
+        style.configure("Muted.TLabel", background=PANEL, foreground=MUTED, font=("Segoe UI", 9))
+        style.configure("Title.TLabel", background=BG, foreground=FG, font=("Segoe UI Semibold", 23))
+        style.configure("Section.TLabel", background=PANEL, foreground=FG, font=("Segoe UI Semibold", 12))
+        style.configure("TButton", background=PANEL_2, foreground=FG, padding=(12, 8), borderwidth=0, font=("Segoe UI Semibold", 9))
+        style.map("TButton", background=[("active", "#343a48"), ("disabled", "#242831")], foreground=[("disabled", "#777d8c")])
+        style.configure("Accent.TButton", background=ACCENT, foreground="#ffffff")
+        style.map("Accent.TButton", background=[("active", "#ff6b7b")])
+        style.configure("TCheckbutton", background=PANEL, foreground=FG, font=("Segoe UI", 10))
+        style.map("TCheckbutton", background=[("active", PANEL)], foreground=[("disabled", MUTED)])
+        style.configure("TEntry", fieldbackground=PANEL_2, foreground=FG, insertcolor=FG, borderwidth=0, padding=6)
+        style.configure("TCombobox", fieldbackground=PANEL_2, foreground=FG, padding=6)
+        style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL_2, bordercolor=PANEL_2)
+
+    def _build(self):
+        header = tk.Frame(self.root, bg=BG)
+        header.pack(fill="x", padx=22, pady=(18, 12))
+        brand = tk.Frame(header, bg=BG)
+        brand.pack(side="left", fill="x", expand=True)
+        tk.Label(brand, text="CHEBUREK", bg=BG, fg=ACCENT, font=("Segoe UI Black", 24)).pack(anchor="w")
+        tk.Label(brand, text="ACCESS  •  управление сетевым подключением", bg=BG, fg=MUTED,
+                 font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 2))
+        self.status_pill = tk.Label(header, textvariable=self.status_var, bg=PANEL_2, fg=MUTED,
+                                    font=("Segoe UI Semibold", 10), padx=13, pady=8)
+        self.status_pill.pack(side="right", anchor="ne", pady=6)
+
+        banner = tk.Frame(self.root, bg="#271920", highlightbackground="#63303e", highlightthickness=1)
+        banner.pack(fill="x", padx=22, pady=(0, 14))
+        tk.Label(banner, text="ВАЖНО", bg="#271920", fg="#ff9eac", font=("Segoe UI Semibold", 9)).pack(
+            side="left", padx=(12, 8), pady=10)
+        tk.Label(banner, text="Нужен собственный прокси-профиль. Серверы в программу не встроены; проверка телефона Codex этим не обходится.",
+                 bg="#271920", fg="#f4dfe3", font=("Segoe UI", 9), anchor="w", wraplength=850).pack(
+            side="left", fill="x", expand=True, padx=(0, 10), pady=8)
+
+        body = tk.Frame(self.root, bg=BG)
+        body.pack(fill="both", expand=True, padx=22, pady=(0, 14))
+        left = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        left.pack(side="left", fill="y", padx=(0, 12))
+        left.configure(width=280)
+        left.pack_propagate(False)
+        right = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
+        right.pack(side="left", fill="both", expand=True)
+
+        tk.Label(left, text="МАРШРУТИЗАЦИЯ", bg=PANEL, fg=FG, font=("Segoe UI Semibold", 12)).pack(
+            anchor="w", padx=16, pady=(16, 4))
+        tk.Label(left, text="Какие домены отправлять через прокси", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 9), wraplength=240, justify="left").pack(anchor="w", padx=16, pady=(0, 10))
+        for name, var in self.service_vars.items():
+            ttk.Checkbutton(left, text=name, variable=var).pack(anchor="w", padx=16, pady=5)
+        tk.Label(left, text="Свои домены", bg=PANEL, fg=FG, font=("Segoe UI Semibold", 10)).pack(
+            anchor="w", padx=16, pady=(13, 4))
+        self.custom_entry = ttk.Entry(left)
+        self.custom_entry.pack(fill="x", padx=16)
+        tk.Label(left, text="Пример: example.com, service.org", bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 8), wraplength=240, justify="left").pack(anchor="w", padx=16, pady=(5, 12))
+        ttk.Checkbutton(left, text="Включить системный прокси Windows", variable=self.use_system_proxy).pack(
+            anchor="w", padx=16, pady=(4, 3))
+        tk.Label(left, text="Локальный адрес: 127.0.0.1:2080\nРежим: системный HTTP/SOCKS-прокси",
+                 bg=PANEL, fg=MUTED, font=("Consolas", 9), justify="left").pack(anchor="w", padx=16, pady=(5, 15))
+
+        tk.Label(right, text="ПРОФИЛЬ ПОДКЛЮЧЕНИЯ", bg=PANEL, fg=FG,
+                 font=("Segoe UI Semibold", 12)).pack(anchor="w", padx=16, pady=(16, 4))
+        tk.Label(right, textvariable=self.profile_var, bg=PANEL, fg=MUTED,
+                 font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=(0, 10))
+
+        tools = tk.Frame(right, bg=PANEL)
+        tools.pack(fill="x", padx=16, pady=(0, 8))
+        ttk.Button(tools, text="Импорт JSON", command=self.import_json).pack(side="left")
+        ttk.Button(tools, text="Очистить", command=self.clear_input).pack(side="left", padx=(7, 0))
+        ttk.Button(tools, text="Установить sing-box", command=self.install_core).pack(side="right")
+
+        editor_frame = tk.Frame(right, bg=PANEL_2, highlightbackground=BORDER, highlightthickness=1)
+        editor_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        self.editor = tk.Text(editor_frame, height=12, wrap="word", bg=PANEL_2, fg=FG, insertbackground=FG,
+                              relief="flat", borderwidth=0, font=("Consolas", 9), padx=10, pady=9,
+                              selectbackground="#454b5a")
+        scroll = ttk.Scrollbar(editor_frame, orient="vertical", command=self.editor.yview)
+        self.editor.configure(yscrollcommand=scroll.set)
+        self.editor.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+
+        tk.Label(right, text="Вставь одну ссылку VLESS / VMess / Trojan / Shadowsocks или полный sing-box JSON.",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 9), wraplength=650, justify="left").pack(
+            anchor="w", padx=16, pady=(0, 12))
+
+        controls = tk.Frame(right, bg=PANEL)
+        controls.pack(fill="x", padx=16, pady=(0, 16))
+        self.connect_btn = ttk.Button(controls, text="▶  Подключить", style="Accent.TButton", command=self.connect)
+        self.connect_btn.pack(side="left")
+        self.disconnect_btn = ttk.Button(controls, text="Отключить", command=self.disconnect, state="disabled")
+        self.disconnect_btn.pack(side="left", padx=(8, 0))
+        ttk.Button(controls, text="Открыть папку логов", command=self.open_logs).pack(side="right")
+
+        footer = tk.Frame(self.root, bg=BG)
+        footer.pack(fill="x", padx=22, pady=(0, 14))
+        tk.Label(footer, text="Поддерживает приложения, которые используют системный прокси. Не все приложения его учитывают.",
+                 bg=BG, fg=MUTED, font=("Segoe UI", 8)).pack(side="left")
+        self.core_label = tk.Label(footer, text="sing-box: не установлен", bg=BG, fg=MUTED, font=("Segoe UI", 8))
+        self.core_label.pack(side="right")
+
+    def refresh_core_state(self):
+        if CORE.exists():
+            self.core_label.configure(text="sing-box: установлен", fg=GREEN)
+        else:
+            self.core_label.configure(text="sing-box: не установлен", fg=MUTED)
+
+    def set_status(self, text, color=MUTED):
+        self.status_var.set(text)
+        self.status_pill.configure(fg=color)
+        self.refresh_core_state()
+
+    def log(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+        self.root.after(0, lambda: self._append_log(f"[{timestamp}] {message}\n"))
+
+    def _append_log(self, message):
+        # Keep the UI log short; connection diagnostics are written to sing-box.log.
+        print(message.rstrip())
+
+    def import_json(self):
+        path = filedialog.askopenfilename(title="Выбрать конфиг sing-box",
+                                          filetypes=[("JSON config", "*.json"), ("All files", "*.*")])
+        if not path:
+            return
+        try:
+            text = Path(path).read_text(encoding="utf-8-sig")
+            data = json.loads(text)
+            if not isinstance(data, dict) or not isinstance(data.get("outbounds"), list):
+                raise ValueError("В файле нет списка outbounds.")
+            self.editor.delete("1.0", "end")
+            self.editor.insert("1.0", json.dumps(data, ensure_ascii=False, indent=2))
+            self.loaded_path = path
+            self.profile_var.set("Импортирован: " + Path(path).name)
+        except Exception as exc:
+            messagebox.showerror("Ошибка импорта", str(exc))
+
+    def clear_input(self):
+        self.editor.delete("1.0", "end")
+        self.loaded_path = ""
+        self.profile_var.set("Профиль не загружен")
+
+    def install_core(self):
+        if self.busy:
+            return
+        self.busy = True
+        self.set_status("Загрузка ядра…", "#ffcf70")
+        self.connect_btn.configure(state="disabled")
+        threading.Thread(target=self._install_core_worker, daemon=True).start()
+
+    def _install_core_worker(self):
+        try:
+            ensure_app_dir()
+            api = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
+            request = urllib.request.Request(api, headers={"User-Agent": "CheburekAccess/1.0", "Accept": "application/vnd.github+json"})
+            with urllib.request.urlopen(request, timeout=30) as response:
+                release = json.loads(response.read().decode("utf-8"))
+            candidates = [a for a in release.get("assets", []) if a.get("name", "").endswith("windows-amd64.zip")]
+            if not candidates:
+                raise RuntimeError("В последнем стабильном релизе не найден архив Windows amd64.")
+            asset = candidates[0]
+            req = urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": "CheburekAccess/1.0"})
+            with urllib.request.urlopen(req, timeout=120) as response:
+                archive = response.read()
+            digest = asset.get("digest", "")
+            if digest.startswith("sha256:"):
+                actual = hashlib.sha256(archive).hexdigest()
+                if actual.lower() != digest.split(":", 1)[1].lower():
+                    raise RuntimeError("SHA-256 скачанного архива не совпал с официальным digest GitHub.")
+            tmp = APP_DIR / "sing-box.zip"
+            tmp.write_bytes(archive)
+            exe_data = None
+            with zipfile.ZipFile(tmp) as zf:
+                names = [n for n in zf.namelist() if n.lower().endswith("sing-box.exe") and not n.endswith("/")]
+                if not names:
+                    raise RuntimeError("В архиве не найден sing-box.exe.")
+                exe_data = zf.read(names[0])
+            tmp.unlink(missing_ok=True)
+            CORE.write_bytes(exe_data)
+            self.root.after(0, lambda: self._core_installed(release.get("tag_name", "latest")))
+        except Exception as exc:
+            err = str(exc)
+            self.root.after(0, lambda e=err: self._core_failed(e))
+
+    def _core_installed(self, version):
+        self.busy = False
+        self.connect_btn.configure(state="normal")
+        self.set_status("Ядро установлено", GREEN)
+        self.profile_var.set(f"sing-box {version} • можно подключаться")
+        messagebox.showinfo("Готово", f"Официальное ядро sing-box {version} скачано и проверено по SHA-256.")
+    def _core_failed(self, error):
+        self.busy = False
+        self.connect_btn.configure(state="normal")
+        self.set_status("Не удалось установить", ACCENT)
+        messagebox.showerror("Ошибка установки", error + "\n\nСкачивание возможно блокируется сетью. Проверь подключение к GitHub.")
+
+    def connect(self):
+        if self.busy or self.process:
+            return
+        if not CORE.exists():
+            messagebox.showinfo("Нужно ядро", "Сначала нажми «Установить sing-box».")
+            return
+        raw = self.editor.get("1.0", "end").strip()
+        selected = [name for name, var in self.service_vars.items() if var.get()]
+        custom_domains = self.custom_entry.get().strip()
+        if not selected and not custom_domains:
+            messagebox.showwarning("Нет правил", "Выбери хотя бы один сервис или введи свои домены.")
+            return
+        self.busy = True
+        self.connect_btn.configure(state="disabled")
+        self.set_status("Проверка профиля…", "#ffcf70")
+        threading.Thread(target=self._connect_worker, args=(raw, selected, custom_domains), daemon=True).start()
+
+    def _connect_worker(self, raw, selected, custom_domains):
+        try:
+            data, already_json = parse_uri(raw)
+            config = make_routing_config(data, selected, custom_domains)
+            CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+            check = subprocess.run([str(CORE), "check", "-c", str(CONFIG_PATH)],
+                                   capture_output=True, text=True, timeout=30,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if check.returncode != 0:
+                detail = (check.stderr or check.stdout or "sing-box check не прошёл").strip()
+                raise RuntimeError("Проверка sing-box не прошла:\n" + detail[-1800:])
+            with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+                log_file.write("\n--- Cheburek start " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n")
+            log_file = open(LOG_PATH, "a", encoding="utf-8")
+            self.process = subprocess.Popen([str(CORE), "run", "-c", str(CONFIG_PATH)],
+                                            stdout=log_file, stderr=subprocess.STDOUT,
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            log_file.close()
+            ready = False
+            for _ in range(50):
+                if self.process.poll() is not None:
+                    raise RuntimeError("sing-box завершился сразу после запуска. Открой лог и проверь профиль.")
+                try:
+                    with socket.create_connection(("127.0.0.1", MIXED_PORT), timeout=0.3):
+                        ready = True
+                        break
+                except OSError:
+                    time.sleep(0.2)
+            if not ready:
+                raise RuntimeError("Локальный прокси не открыл порт 2080 за 10 секунд. Проверь лог sing-box.")
+            if self.use_system_proxy.get():
+                self._enable_system_proxy()
+            self.root.after(0, self._connected)
+        except Exception as exc:
+            self._stop_process_silent()
+            err = str(exc)
+            self.root.after(0, lambda e=err: self._connect_failed(e))
+
+    def _enable_system_proxy(self):
+        before = get_registry_values()
+        if not BACKUP_PATH.exists():
+            BACKUP_PATH.write_text(json.dumps(before), encoding="utf-8")
+        write_registry_values({"ProxyEnable": 1, "ProxyServer": f"127.0.0.1:{MIXED_PORT}",
+                               "ProxyOverride": "<local>;localhost;127.*"})
+        self.proxy_changed = True
+
+    def _connected(self):
+        self.busy = False
+        self.connect_btn.configure(state="disabled")
+        self.disconnect_btn.configure(state="normal")
+        self.set_status("Подключено", GREEN)
+        self.profile_var.set(f"Активен локальный прокси 127.0.0.1:{MIXED_PORT}")
+        messagebox.showinfo("Подключено", "Прокси запущен. Выбранные домены направляются через прокси-профиль, остальные — напрямую.\n\nПриложения, игнорирующие системный прокси, нужно настроить отдельно.")
+    def _connect_failed(self, error):
+        self.busy = False
+        self.connect_btn.configure(state="normal")
+        self.disconnect_btn.configure(state="disabled")
+        self.set_status("Ошибка подключения", ACCENT)
+        messagebox.showerror("Не удалось подключиться", error)
+
+    def _stop_process_silent(self):
+        try:
+            if self.process and self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+        except Exception:
+            pass
+        self.process = None
+
+    def disconnect(self):
+        self._stop_process_silent()
+        if self.proxy_changed:
+            try:
+                if BACKUP_PATH.exists():
+                    write_registry_values(json.loads(BACKUP_PATH.read_text(encoding="utf-8")))
+                    BACKUP_PATH.unlink(missing_ok=True)
+            except Exception as exc:
+                messagebox.showwarning("Прокси Windows", "Не удалось восстановить прежние настройки прокси:\n" + str(exc))
+            self.proxy_changed = False
+        self.connect_btn.configure(state="normal")
+        self.disconnect_btn.configure(state="disabled")
+        self.set_status("Отключено", MUTED)
+        self.profile_var.set("Подключение остановлено")
+
+    def open_logs(self):
+        ensure_app_dir()
+        target = APP_DIR
+        try:
+            os.startfile(str(target))
+        except Exception:
+            messagebox.showinfo("Папка приложения", str(target))
+
+    def on_close(self):
+        self.disconnect()
+        self.root.destroy()
+
+
+def main():
+    root = tk.Tk()
+    CheburekApp(root)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
