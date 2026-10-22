@@ -1,0 +1,2 @@
+# This app uses only the Python standard library.
+# PyInstaller is installed by the Windows GitHub Actions workflow for packaging.
