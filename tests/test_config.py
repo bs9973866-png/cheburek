@@ -1,6 +1,6 @@
 import unittest
 
-from app import extract_proxy_uris, make_routing_config, parse_uri
+from app import extract_proxy_uris, make_probe_config, make_routing_config, parse_uri
 
 
 class ProfileTests(unittest.TestCase):
@@ -51,6 +51,22 @@ class ProfileTests(unittest.TestCase):
         self.assertEqual(ready["route"]["rules"][0]["outbound"], "primary")
         self.assertIn("youtube.com", ready["route"]["rules"][1]["domain_suffix"])
         self.assertIn("example.net", ready["route"]["rules"][2]["domain_suffix"])
+
+    def test_auto_discovery_probe_routes_through_selected_proxy(self):
+        source = {
+            "outbounds": [
+                {"type": "vless", "tag": "main-proxy", "server": "proxy.example", "server_port": 443,
+                 "uuid": "11111111-1111-4111-8111-111111111111"},
+                {"type": "direct", "tag": "direct"}
+            ],
+            "inbounds": [],
+            "route": {"rules": []}
+        }
+        config = make_probe_config(source, ["OpenAI / Codex"], "")
+        first_rule = config["route"]["rules"][0]
+        self.assertEqual(first_rule["outbound"], "main-proxy")
+        self.assertIn("cp.cloudflare.com", first_rule["domain_suffix"])
+        self.assertIn("example.com", first_rule["domain_suffix"])
 
     def test_invalid_custom_domain_rejected(self):
         source = {"outbounds": [{"type": "vless", "tag": "proxy"}], "inbounds": []}
