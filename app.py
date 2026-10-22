@@ -1,5 +1,6 @@
 import base64
 import ctypes
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -737,20 +738,40 @@ class CheburekApp:
     def _restore_ui_state(self):
         state = self.saved_state or {}
         profile = state.get("profile", "")
-        if profile:
+        self.auto_profile_active = bool(state.get("auto_profile", False)) and AUTO_PROFILE_PATH.is_file()
+        if self.auto_profile_active or profile == AUTO_PROFILE_TOKEN:
+            self.auto_profile_active = AUTO_PROFILE_PATH.is_file()
+            self.editor.delete("1.0", "end")
+            self.editor.insert("1.0", "Автоматический профиль sing-box\nПул публичных узлов сохранён локально. Нажми «Подключиться» для повторного использования.")
+            self.profile_var.set(state.get("profile_label", "Автопрофиль восстановлен локально"))
+        elif profile:
+            self.auto_profile_active = False
             self.editor.delete("1.0", "end")
             self.editor.insert("1.0", profile)
             self.profile_var.set(state.get("profile_label", "Профиль восстановлен локально"))
+        else:
+            self.auto_profile_active = False
         domains = state.get("custom_domains", "")
         if domains:
             self.custom_entry.insert(0, domains)
         if state.get("loaded_path"):
             self.loaded_path = state["loaded_path"]
 
+    def _manual_profile_edit(self, _event=None):
+        if getattr(self, "auto_profile_active", False):
+            self.auto_profile_active = False
+            self.loaded_path = ""
+            self.profile_var.set("Ручной профиль")
+            self._save_state()
+
     def _save_state(self):
         try:
+            profile_text = AUTO_PROFILE_TOKEN if getattr(self, "auto_profile_active", False) else (
+                self.editor.get("1.0", "end").strip() if hasattr(self, "editor") else ""
+            )
             state = {
-                "profile": self.editor.get("1.0", "end").strip() if hasattr(self, "editor") else "",
+                "profile": profile_text,
+                "auto_profile": bool(getattr(self, "auto_profile_active", False)),
                 "profile_label": self.profile_var.get() if hasattr(self, "profile_var") else "",
                 "custom_domains": self.custom_entry.get().strip() if hasattr(self, "custom_entry") else "",
                 "mode": self.mode_var.get() if hasattr(self, "mode_var") else "Весь трафик (TUN)",
@@ -906,6 +927,7 @@ class CheburekApp:
                               selectbackground="#454b5a")
         scroll = ttk.Scrollbar(editor_frame, orient="vertical", command=self.editor.yview)
         self.editor.configure(yscrollcommand=scroll.set)
+        self.editor.bind("<KeyPress>", self._manual_profile_edit)
         self.editor.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
 
@@ -959,6 +981,7 @@ class CheburekApp:
             data = json.loads(text)
             if not isinstance(data, dict) or not isinstance(data.get("outbounds"), list):
                 raise ValueError("В файле нет списка outbounds.")
+            self.auto_profile_active = False
             self.editor.delete("1.0", "end")
             self.editor.insert("1.0", json.dumps(data, ensure_ascii=False, indent=2))
             self.loaded_path = path
@@ -967,6 +990,7 @@ class CheburekApp:
             messagebox.showerror("Ошибка импорта", str(exc))
 
     def clear_input(self):
+        self.auto_profile_active = False
         self.editor.delete("1.0", "end")
         self.loaded_path = ""
         self.profile_var.set("Профиль не загружен")
@@ -1005,89 +1029,217 @@ class CheburekApp:
         self.set_status("Ищу и проверяю узлы…", "#ffcf70")
         threading.Thread(target=self._auto_find_worker, args=(selected, custom_domains), daemon=True).start()
 
+    def _probe_auto_candidate(self, candidate, selected, custom_domains, port):
+        """Validate a full sing-box pool or one URI through a temporary local mixed inbound."""
+        config_path = APP_DIR / f"auto-probe-{port}.json"
+        log_path = APP_DIR / f"auto-probe-{port}.log"
+        process = None
+        log_handle = None
+        try:
+            data, _ = parse_uri(candidate)
+            config = make_probe_config(data, selected, custom_domains, inbound_port=port)
+            config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+            check = subprocess.run(
+                [str(CORE), "check", "-c", str(config_path)],
+                capture_output=True, text=True, timeout=12,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+            if check.returncode != 0:
+                detail = (check.stderr or check.stdout or "config check failed").strip()[-900:]
+                return False, "sing-box rejected candidate: " + detail
+            with open(log_path, "a", encoding="utf-8") as log_file:
+                log_file.write("\n--- auto-probe " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n")
+            log_handle = open(log_path, "a", encoding="utf-8")
+            process = subprocess.Popen(
+                [str(CORE), "run", "-c", str(config_path)],
+                stdout=log_handle, stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            )
+            log_handle.close()
+            log_handle = None
+
+            ready = False
+            for _ in range(24):
+                if process.poll() is not None:
+                    try:
+                        detail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-8:])
+                    except Exception:
+                        detail = ""
+                    return False, "sing-box exited: " + detail[-700:]
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                        ready = True
+                        break
+                except OSError:
+                    time.sleep(0.12)
+            if not ready:
+                return False, "local inbound didn't start"
+
+            proxies = {"http": f"http://127.0.0.1:{port}", "https": f"http://127.0.0.1:{port}"}
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+            probe_errors = []
+            # 204 is the primary probe; example.com is only a fallback in case the first endpoint is filtered.
+            for target in ("https://cp.cloudflare.com/generate_204", "https://example.com/"):
+                try:
+                    req = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/2.1"})
+                    with opener.open(req, timeout=3.0) as response:
+                        if 200 <= response.status < 400:
+                            return True, target
+                        probe_errors.append(f"{target}: HTTP {response.status}")
+                except Exception as exc:
+                    probe_errors.append(f"{target}: {exc}")
+            return False, "; ".join(probe_errors[-2:])
+        except Exception as exc:
+            return False, str(exc)
+        finally:
+            if log_handle:
+                try:
+                    log_handle.close()
+                except Exception:
+                    pass
+            if process is not None:
+                try:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                except Exception:
+                    pass
+
     def _auto_find_worker(self, selected, custom_domains):
         errors = []
-        candidates = []
+        profile_candidates = []
+        uri_candidates = []
+        sources_ok = 0
+
+        # First try a complete, recently regenerated sing-box profile. Its urltest outbound
+        # can fail over between its own nodes; this avoids betting everything on 24 stale links.
+        for source in PUBLIC_PROFILE_FEEDS:
+            try:
+                request = urllib.request.Request(
+                    source, headers={"User-Agent": "CheburekAccess/2.1", "Accept": "application/json,text/plain,*/*"}
+                )
+                with urllib.request.urlopen(request, timeout=14) as response:
+                    raw_bytes = response.read(MAX_FEED_BYTES + 1)
+                if len(raw_bytes) > MAX_FEED_BYTES:
+                    errors.append(f"{urllib.parse.urlparse(source).netloc}: feed exceeds {MAX_FEED_BYTES // 1_000_000} MB")
+                    continue
+                body = raw_bytes.decode("utf-8-sig", "replace").strip()
+                if not body.startswith("{"):
+                    errors.append(f"{urllib.parse.urlparse(source).netloc}: response was not JSON")
+                    continue
+                profile = json.loads(body)
+                if not isinstance(profile, dict) or not isinstance(profile.get("outbounds"), list) or not profile["outbounds"]:
+                    errors.append(f"{urllib.parse.urlparse(source).netloc}: no outbounds in JSON")
+                    continue
+                profile_candidates.append(json.dumps(profile, ensure_ascii=False))
+                sources_ok += 1
+                break
+            except Exception as exc:
+                errors.append(f"{urllib.parse.urlparse(source).netloc}: {exc}")
+
         for source in PUBLIC_NODE_FEEDS:
             try:
-                request = urllib.request.Request(source, headers={"User-Agent": "CheburekAccess/1.0", "Accept": "text/plain,*/*"})
-                with urllib.request.urlopen(request, timeout=12) as response:
-                    data = response.read(8_000_001)
-                if len(data) > 8_000_000:
-                    errors.append("Слишком большая подписка: " + urllib.parse.urlparse(source).netloc)
+                request = urllib.request.Request(
+                    source, headers={"User-Agent": "CheburekAccess/2.1", "Accept": "text/plain,*/*"}
+                )
+                with urllib.request.urlopen(request, timeout=14) as response:
+                    raw_bytes = response.read(MAX_FEED_BYTES + 1)
+                if len(raw_bytes) > MAX_FEED_BYTES:
+                    errors.append(f"{urllib.parse.urlparse(source).netloc}: feed is too large")
                     continue
-                candidates.extend(extract_proxy_uris(data.decode("utf-8-sig", "replace")))
-                candidates = list(dict.fromkeys(candidates))
-                if len(candidates) >= 18:
+                body = raw_bytes.decode("utf-8-sig", "replace")
+                extracted = extract_profile_candidates(body)
+                sources_ok += 1
+                # Keep a small set of full JSON profiles at the front and collect links from more
+                # than one source; do not stop after the first 18 candidates.
+                for item in extracted:
+                    if item.lstrip().startswith("{"):
+                        if item not in profile_candidates:
+                            profile_candidates.append(item)
+                    elif item not in uri_candidates:
+                        uri_candidates.append(item)
+                if len(uri_candidates) >= 300:
                     break
             except Exception as exc:
                 errors.append(f"{urllib.parse.urlparse(source).netloc}: {exc}")
-        candidates = candidates[:24]
-        if not candidates:
-            detail = "\n".join(errors[-3:]) or "В публичных списках не найдено поддерживаемых ссылок."
-            self.root.after(0, lambda e=detail: self._auto_find_failed("Не удалось получить список узлов. Проверь доступ к зеркалам подписок.\n\n" + e))
+
+        # Dedupe large pool profiles separately from individual links.
+        profile_candidates = list(dict.fromkeys(profile_candidates))[:3]
+        if not profile_candidates and not uri_candidates:
+            detail = "\n".join(errors[-5:]) or "No JSON profiles or supported proxy links were found."
+            self.root.after(0, lambda e=detail: self._auto_find_failed(
+                "Не удалось скачать рабочие источники профилей. Проверь интернет-доступ к зеркалам и попробуй ещё раз.\n\n" + e
+            ))
             return
 
-        total = len(candidates)
-        for index, uri in enumerate(candidates, 1):
-            self.root.after(0, lambda i=index, t=total: self.set_status(f"Проверка узла {i}/{t}…", "#ffcf70"))
-            try:
-                data, _ = parse_uri(uri)
-                candidate_config = make_probe_config(data, selected, custom_domains)
-                PROBE_CONFIG_PATH.write_text(json.dumps(candidate_config, ensure_ascii=False, indent=2), encoding="utf-8")
-                check = subprocess.run([str(CORE), "check", "-c", str(PROBE_CONFIG_PATH)], capture_output=True,
-                                       text=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                if check.returncode != 0:
-                    continue
-                with open(LOG_PATH, "a", encoding="utf-8") as log_file:
-                    log_file.write("\n--- Cheburek public node probe " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n")
-                log_handle = open(LOG_PATH, "a", encoding="utf-8")
-                probe = subprocess.Popen([str(CORE), "run", "-c", str(PROBE_CONFIG_PATH)], stdout=log_handle,
-                                          stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-                log_handle.close()
+        # Try complete auto/urltest pools first, serially: they can select a valid node internally.
+        checked = 0
+        failures = []
+        for profile_index, profile in enumerate(profile_candidates, 1):
+            self.root.after(0, lambda i=profile_index, n=len(profile_candidates): self.set_status(
+                f"Проверяю готовый пул узлов {i}/{n}…", "#ffcf70"
+            ))
+            ok, detail = self._probe_auto_candidate(profile, selected, custom_domains, MIXED_PORT)
+            checked += 1
+            if ok:
+                self.root.after(0, lambda p=profile, i=profile_index, n=len(profile_candidates):
+                                self._auto_find_success(p, i, n, "JSON-пул"))
+                return
+            failures.append("JSON profile: " + detail)
+
+        # The text feeds can include thousands of links. Test a wider batch in parallel on distinct
+        # local ports so dead links don't cause a multi-minute sequential wait.
+        candidate_limit = min(60, len(uri_candidates))
+        candidates = uri_candidates[:candidate_limit]
+        if candidates:
+            self.root.after(0, lambda n=candidate_limit: self.set_status(
+                f"Проверяю {n} отдельных узлов…", "#ffcf70"
+            ))
+        found = None
+        found_index = 0
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_map = {}
+            for index, candidate in enumerate(candidates, 1):
+                port = 21000 + index
+                future = executor.submit(self._probe_auto_candidate, candidate, selected, custom_domains, port)
+                future_map[future] = (index, candidate)
+            for future in as_completed(future_map):
+                index, candidate = future_map[future]
                 try:
-                    ready = False
-                    for _ in range(18):
-                        if probe.poll() is not None:
-                            break
-                        try:
-                            with socket.create_connection(("127.0.0.1", MIXED_PORT), timeout=0.25):
-                                ready = True
-                                break
-                        except OSError:
-                            time.sleep(0.2)
-                    if not ready:
-                        continue
-                    proxies = {"http": f"http://127.0.0.1:{MIXED_PORT}", "https": f"http://127.0.0.1:{MIXED_PORT}"}
-                    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
-                    works = False
-                    for target in ("https://cp.cloudflare.com/generate_204", "https://example.com/"):
-                        try:
-                            req = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/1.0"})
-                            with opener.open(req, timeout=4) as response:
-                                if 200 <= response.status < 400:
-                                    works = True
-                                    break
-                        except Exception:
-                            pass
-                    if works:
-                        self.root.after(0, lambda u=uri, i=index, t=total: self._auto_find_success(u, i, t))
-                        return
-                finally:
-                    try:
-                        if probe.poll() is None:
-                            probe.terminate()
-                            try:
-                                probe.wait(timeout=2)
-                            except subprocess.TimeoutExpired:
-                                probe.kill()
-                    except Exception:
-                        pass
-            except Exception as exc:
-                errors.append(str(exc))
-        detail = "\n".join(errors[-3:])
-        self.root.after(0, lambda d=detail: self._auto_find_failed(
-            "Не найден рабочий узел среди проверенных кандидатов. Бесплатные узлы часто отключаются; попробуй ещё раз позже.\n\n" + d))
+                    ok, detail = future.result()
+                except Exception as exc:
+                    ok, detail = False, str(exc)
+                checked += 1
+                if ok:
+                    found, found_index = candidate, index
+                    # We cannot safely kill futures already running, but will cancel queued ones.
+                    for other in future_map:
+                        if other is not future:
+                            other.cancel()
+                    break
+                if detail:
+                    failures.append(f"node {index}: {detail}")
+                if checked % 5 == 0:
+                    self.root.after(0, lambda c=checked, t=candidate_limit + len(profile_candidates):
+                                    self.set_status(f"Проверено {c}/{t} профилей…", "#ffcf70"))
+
+        if found is not None:
+            self.root.after(0, lambda u=found, i=found_index, t=candidate_limit:
+                            self._auto_find_success(u, i, t, "отдельный узел"))
+            return
+
+        details = errors[-3:] + failures[-3:]
+        detail = "\n".join(details) or "Все загруженные профили и узлы не прошли HTTPS-проверку."
+        reason = (
+            f"Загружено источников: {sources_ok}; проверено профилей/узлов: {checked}.\n"
+            "Не нашлось узла, который смог пройти HTTPS через локальный прокси. "
+            "Часть общедоступных узлов может быть недоступна именно у твоего провайдера.\n\n"
+            + detail
+        )
+        self.root.after(0, lambda e=reason: self._auto_find_failed(reason))
 
     def _auto_find_success(self, uri, index, total):
         self.busy = False
