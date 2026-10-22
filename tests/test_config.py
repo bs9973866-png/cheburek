@@ -1,6 +1,6 @@
 import unittest
 
-from app import extract_proxy_uris, make_probe_config, make_routing_config, parse_uri
+from app import extract_profile_candidates, extract_proxy_uris, make_probe_config, make_routing_config, parse_uri, proxy_tag_for
 
 
 class ProfileTests(unittest.TestCase):
@@ -32,6 +32,41 @@ class ProfileTests(unittest.TestCase):
         self.assertFalse(imported)
         self.assertEqual(config["outbounds"][0]["type"], "trojan")
         self.assertEqual(config["outbounds"][0]["password"], "secret")
+
+    def test_allow_insecure_flag_is_preserved_for_tls_nodes(self):
+        config, _ = parse_uri(
+            "trojan://secret@example.org:443?security=tls&sni=example.org&allowInsecure=1"
+        )
+        self.assertTrue(config["outbounds"][0]["tls"]["insecure"])
+
+    def test_xhttp_nodes_are_skipped_instead_of_silently_misconfigured(self):
+        with self.assertRaisesRegex(ValueError, "XHTTP"):
+            parse_uri(
+                "trojan://secret@example.org:443?security=tls&sni=example.org&type=xhttp&path=%2Fedge"
+            )
+
+    def test_sip002_shadowsocks_uri(self):
+        config, _ = parse_uri("ss://aes-128-gcm:secret@example.org:8388#test")
+        outbound = config["outbounds"][0]
+        self.assertEqual(outbound["type"], "shadowsocks")
+        self.assertEqual(outbound["method"], "aes-128-gcm")
+        self.assertEqual(outbound["password"], "secret")
+
+    def test_json_subscription_is_detected_and_auto_pool_is_preferred(self):
+        profile = {
+            "outbounds": [
+                {"type": "vless", "tag": "node-1", "server": "proxy.example", "server_port": 443,
+                 "uuid": "11111111-1111-4111-8111-111111111111"},
+                {"type": "urltest", "tag": "auto", "outbounds": ["node-1"],
+                 "url": "https://cp.cloudflare.com/generate_204", "interval": "3m"},
+                {"type": "direct", "tag": "direct"}
+            ],
+            "inbounds": [],
+            "route": {"rules": []}
+        }
+        candidates = extract_profile_candidates(__import__("json").dumps(profile))
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(proxy_tag_for(profile), "auto")
 
     def test_imported_config_adds_split_routes(self):
         source = {
