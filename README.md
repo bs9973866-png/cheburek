@@ -1,23 +1,26 @@
 # Cheburek Access
 
-Windows desktop client for managing a user-supplied sing-box/VLESS/Trojan/Shadowsocks proxy profile and applying domain-based routing for selected services.
+Windows desktop client for user-supplied proxy profiles and automatic discovery/testing of public community nodes.
 
-> This project does not include proxy servers or provide accounts. Use a server/configuration you own or are authorized to use. Routing cannot bypass phone verification, account eligibility rules, or service-side restrictions.
+> This project does not operate proxy servers. Public nodes are run by third parties, can disappear at any time and may observe connection metadata; avoid banking and sensitive accounts on unknown free proxies. Routing does not bypass phone verification or account eligibility checks.
+
+## Automatic node discovery
+
+Click **Автоподбор узла**. The application checks several public subscription mirrors, extracts supported VLESS/VMess/Trojan/Shadowsocks links, validates each candidate with sing-box, then attempts an HTTPS request through the local proxy. If one works, it imports the URI and starts the connection.
+
+Network feeds used by the auto-discovery option:
+- `morpheusadam/v2ray-config` mini bundle, via jsDelivr / raw mirrors
+- `Au1rxx/free-vpn-subscriptions` V2Ray base64 feed, via jsDelivr
+
+These are public third-party feeds, not a guarantee of free or stable service. The app tests from the user's connection, but a node can stop working seconds later. If all source mirrors are blocked, automatic discovery cannot fetch candidates.
 
 ## Windows executable
 
-The GitHub Actions build now downloads the official sing-box Windows amd64 release, verifies its SHA-256 digest and bundles the binary inside `CheburekAccess.exe`. The end user therefore does not need the app to download sing-box from GitHub on first launch.
+The GitHub Actions build downloads the official sing-box Windows amd64 release, verifies its SHA-256 digest, and bundles it inside `CheburekAccess.exe`; the app does not need to download the core from GitHub on first launch.
 
-## Use
+## Manual profile import
 
-1. Download `CheburekAccess.exe` from the latest successful Actions run artifact.
-2. Launch the app and paste a supported VLESS / VMess / Trojan / Shadowsocks URI, or import a sing-box JSON profile.
-3. Select domains to route, then click **Подключить**.
-4. When enabling system proxy, the app backs up and restores previous Windows proxy settings on disconnect/exit.
-
-If using a custom build without a bundled core, choose **Выбрать sing-box.exe** and select `sing-box.exe` from the official sing-box release ZIP extracted on your PC.
-
-The client uses the Windows system-proxy setting when enabled; applications that ignore the system proxy may require separate configuration. It does not include VPN servers or credentials.
+You can paste a supported VLESS / VMess / Trojan / Shadowsocks URI or import a sing-box JSON profile. The app uses the Windows system-proxy setting when enabled; some apps ignore it and may need separate configuration.
 
 ## Build from source
 
