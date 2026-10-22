@@ -203,14 +203,16 @@ BORDER = "#343a46"
 # Public, third-party sources. JSON profiles are tried first because their urltest
 # groups can select a live node without blindly trusting the first N links.
 PUBLIC_PROFILE_FEEDS = [
-    "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
     "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/singbox.json",
     "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
     "https://gh-proxy.com/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
+    "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
 ]
 PUBLIC_NODE_FEEDS = [
-    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
+    "https://ghproxy.net/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/all.txt",
     "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/all.txt",
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/all-base64.txt",
@@ -398,10 +400,10 @@ def parse_uri(raw):
         return {"outbounds": [out]}, False
 
     if scheme == "ss":
-        # SIP002 format: ss://method:password@host:port, optionally percent-encoded.
+        # SIP002 forms include encoded method:password@host:port and separate method:password.
         parsed_user = urllib.parse.unquote(parsed.username or "")
         parsed_password = urllib.parse.unquote(parsed.password or "")
-        if host and port and parsed_password and ":" not in parsed_user:
+        if host and port and parsed_password:
             method, password = parsed_user, parsed_password
         else:
             user = parsed_user
@@ -411,8 +413,8 @@ def parse_uri(raw):
                     user = base64.urlsafe_b64decode(token).decode("utf-8")
             except Exception:
                 pass
-            if ":" not in user:
-                # Alternative SIP002 form: ss://BASE64(method:password@host:port)
+            if ":" not in user or "@" in user:
+                # Base64 payload may contain the full userinfo@host:port, not just method:password.
                 payload = raw.split("://", 1)[1].split("#", 1)[0]
                 payload = urllib.parse.unquote(payload)
                 payload += "=" * ((4 - len(payload) % 4) % 4)
@@ -420,12 +422,17 @@ def parse_uri(raw):
                     decoded = base64.urlsafe_b64decode(payload).decode("utf-8")
                     p2 = urllib.parse.urlsplit("ss://" + decoded)
                     host, port = p2.hostname, p2.port
-                    user = urllib.parse.unquote(p2.username or "") + ":" + urllib.parse.unquote(p2.password or "")
+                    method = urllib.parse.unquote(p2.username or "")
+                    password = urllib.parse.unquote(p2.password or "")
+                    if not method or not password or not host or not port:
+                        raise ValueError("Incomplete SIP002 profile.")
+                    user = ""
                 except Exception as exc:
                     raise ValueError("Не удалось разобрать Shadowsocks URI. Попробуй импорт sing-box JSON.") from exc
-            if ":" not in user:
-                raise ValueError("В SS-ссылке не распознаны method:password.")
-            method, password = user.split(":", 1)
+            if user:
+                if ":" not in user:
+                    raise ValueError("В SS-ссылке не распознаны method:password.")
+                method, password = user.split(":", 1)
         out = {"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": port,
                "method": method, "password": password}
         return {"outbounds": [out]}, False
