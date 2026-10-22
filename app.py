@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import queue
+import random
 import re
 import shutil
 import socket
@@ -212,6 +213,8 @@ PUBLIC_NODE_FEEDS = [
     "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
     "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://ghproxy.net/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
     "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/v2ray-base64.txt",
     "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
@@ -484,7 +487,7 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
 
     # Health-check traffic is explicitly routed through the selected proxy in every mode.
     rules.append({
-        "domain_suffix": ["cp.cloudflare.com", "example.com"],
+        "domain_suffix": ["cp.cloudflare.com", "example.com", "www.gstatic.com", "www.microsoft.com"],
         "action": "route",
         "outbound": proxy_tag
     })
@@ -527,7 +530,7 @@ def make_probe_config(data, enabled_services, custom_domains, inbound_port=MIXED
         rules = []
         route["rules"] = rules
     rules.insert(0, {
-        "domain_suffix": ["cp.cloudflare.com", "example.com"],
+        "domain_suffix": ["cp.cloudflare.com", "example.com", "www.gstatic.com", "www.microsoft.com"],
         "action": "route",
         "outbound": proxy_tag_for(config),
     })
@@ -1079,10 +1082,10 @@ class CheburekApp:
             opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
             probe_errors = []
             # 204 is the primary probe; example.com is only a fallback in case the first endpoint is filtered.
-            for target in ("https://cp.cloudflare.com/generate_204", "https://example.com/"):
+            for target in ("https://cp.cloudflare.com/generate_204", "https://example.com/", "https://www.gstatic.com/generate_204", "https://www.microsoft.com/"):
                 try:
                     req = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/2.1"})
-                    with opener.open(req, timeout=3.0) as response:
+                    with opener.open(req, timeout=4.5) as response:
                         if 200 <= response.status < 400:
                             return True, target
                         probe_errors.append(f"{target}: HTTP {response.status}")
@@ -1192,15 +1195,20 @@ class CheburekApp:
 
         # The text feeds can include thousands of links. Test a wider batch in parallel on distinct
         # local ports so dead links don't cause a multi-minute sequential wait.
-        candidate_limit = min(60, len(uri_candidates))
-        candidates = uri_candidates[:candidate_limit]
+        candidate_limit = min(180, len(uri_candidates))
+        if len(uri_candidates) > candidate_limit:
+            # Spread the test across the whole feed. The first rows are often stale or
+            # clustered by provider; repeated runs rotate the subset rather than retrying them.
+            candidates = random.Random(time.time_ns()).sample(uri_candidates, candidate_limit)
+        else:
+            candidates = uri_candidates[:]
         if candidates:
             self.root.after(0, lambda n=candidate_limit: self.set_status(
                 f"Проверяю {n} отдельных узлов…", "#ffcf70"
             ))
         found = None
         found_index = 0
-        with ThreadPoolExecutor(max_workers=5) as executor:
+        with ThreadPoolExecutor(max_workers=10) as executor:
             future_map = {}
             for index, candidate in enumerate(candidates, 1):
                 port = 21000 + index
@@ -1405,12 +1413,14 @@ class CheburekApp:
         targets = (
             "https://cp.cloudflare.com/generate_204",
             "https://example.com/",
+            "https://www.gstatic.com/generate_204",
+            "https://www.microsoft.com/",
             "https://www.google.com/generate_204",
         )
         for target in targets:
             try:
                 request = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/2.0"})
-                with opener.open(request, timeout=7) as response:
+                with opener.open(request, timeout=8) as response:
                     if 200 <= response.status < 400:
                         return target
                     errors.append(f"{target}: HTTP {response.status}")
