@@ -1,9 +1,21 @@
 import unittest
 
-from app import make_routing_config, parse_uri
+from app import extract_proxy_uris, make_routing_config, parse_uri
 
 
 class ProfileTests(unittest.TestCase):
+    def test_extract_plain_subscription_uris(self):
+        body = "# tested profiles\nvless://uuid@example.org:443?security=tls\nhttps://example.org/not-a-node\n"
+        nodes = extract_proxy_uris(body)
+        self.assertEqual(len(nodes), 1)
+        self.assertTrue(nodes[0].startswith("vless://"))
+
+    def test_extract_base64_subscription_uris(self):
+        import base64
+        raw = "vless://uuid@example.org:443?security=tls\ntrojan://secret@example.org:443\n"
+        encoded = base64.b64encode(raw.encode()).decode()
+        self.assertEqual(len(extract_proxy_uris(encoded)), 2)
+
     def test_vless_uri_creates_tls_proxy(self):
         config, imported = parse_uri(
             "vless://11111111-1111-4111-8111-111111111111@example.org:443"
