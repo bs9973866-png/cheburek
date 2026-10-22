@@ -577,9 +577,16 @@ class CheburekApp:
 
     def _style(self):
         self.root.title(APP_NAME)
-        self.root.geometry("1040x780")
-        self.root.minsize(900, 690)
+        self.root.geometry("1180x860")
+        self.root.minsize(1000, 740)
         self.root.configure(bg=BG)
+        try:
+            icon_file = resource_path("assets/cheburek.png")
+            if icon_file.is_file():
+                self.window_icon = tk.PhotoImage(file=str(icon_file))
+                self.root.iconphoto(True, self.window_icon)
+        except Exception:
+            self.window_icon = None
         style = ttk.Style()
         try:
             style.theme_use("clam")
@@ -601,6 +608,8 @@ class CheburekApp:
         style.configure("TEntry", fieldbackground=PANEL_2, foreground=FG, insertcolor=FG, borderwidth=0, padding=6)
         style.configure("TCombobox", fieldbackground=PANEL_2, foreground=FG, padding=6)
         style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL_2, bordercolor=PANEL_2)
+        style.configure("TCombobox", fieldbackground=PANEL_2, background=PANEL_2, foreground=FG, arrowcolor=ACCENT)
+        style.map("TCombobox", fieldbackground=[("readonly", PANEL_2)], foreground=[("readonly", FG)])
 
     def _set_global_theme(self, name):
         global BG, PANEL, PANEL_2, FG, MUTED, ACCENT, GREEN, BORDER
@@ -700,15 +709,33 @@ class CheburekApp:
 
     def _build(self):
         header = tk.Frame(self.root, bg=BG)
-        header.pack(fill="x", padx=22, pady=(18, 12))
+        header.pack(fill="x", padx=22, pady=(14, 11))
         brand = tk.Frame(header, bg=BG)
         brand.pack(side="left", fill="x", expand=True)
-        tk.Label(brand, text="CHEBUREK", bg=BG, fg=ACCENT, font=("Segoe UI Black", 24)).pack(anchor="w")
-        tk.Label(brand, text="ACCESS  •  управление сетевым подключением", bg=BG, fg=MUTED,
+        try:
+            icon_path = resource_path("assets/cheburek.png")
+            if icon_path.is_file():
+                self.logo_img = tk.PhotoImage(file=str(icon_path)).subsample(5, 5)
+                tk.Label(brand, image=self.logo_img, bg=BG, bd=0).pack(side="left", padx=(0, 12))
+        except Exception:
+            self.logo_img = None
+        brand_text = tk.Frame(brand, bg=BG)
+        brand_text.pack(side="left", anchor="w")
+        tk.Label(brand_text, text="CHEBUREK", bg=BG, fg=ACCENT, font=("Segoe UI Black", 24)).pack(anchor="w")
+        tk.Label(brand_text, text="ACCESS  •  интернет-маршрутизация", bg=BG, fg=MUTED,
                  font=("Segoe UI", 10)).pack(anchor="w", pady=(0, 2))
+
+        theme_box = tk.Frame(header, bg=BG)
+        theme_box.pack(side="right", padx=(10, 14), pady=4)
+        tk.Label(theme_box, text="ТЕМА", bg=BG, fg=MUTED, font=("Segoe UI Semibold", 8)).pack(anchor="w")
+        self.theme_combo = ttk.Combobox(theme_box, textvariable=self.theme_var, values=list(THEMES.keys()),
+                                        state="readonly", width=12)
+        self.theme_combo.pack()
+        self.theme_combo.bind("<<ComboboxSelected>>", lambda _event: self.apply_theme())
+
         self.status_pill = tk.Label(header, textvariable=self.status_var, bg=PANEL_2, fg=MUTED,
                                     font=("Segoe UI Semibold", 10), padx=13, pady=8)
-        self.status_pill.pack(side="right", anchor="ne", pady=6)
+        self.status_pill.pack(side="right", anchor="ne", pady=9)
 
         banner = tk.Frame(self.root, bg="#271920", highlightbackground="#63303e", highlightthickness=1)
         banner.pack(fill="x", padx=22, pady=(0, 14))
