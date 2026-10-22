@@ -491,6 +491,24 @@ class CheburekApp:
     def install_core(self):
         if self.busy:
             return
+        # A self-contained build ships with the official sing-box binary.
+        # Never attempt a network download when the core is already available locally.
+        try:
+            ensure_app_dir()
+            if CORE.is_file():
+                self.set_status("Ядро уже установлено", GREEN)
+                self.profile_var.set("sing-box доступен локально • можно подключаться")
+                messagebox.showinfo("Ядро готово", "sing-box уже установлен. Скачивать его заново не нужно — вставь профиль и нажми «Подключить».")
+                return
+            if BUNDLED_CORE.is_file():
+                shutil.copy2(BUNDLED_CORE, CORE)
+                self.set_status("Ядро установлено", GREEN)
+                self.profile_var.set("sing-box извлечён из EXE • можно подключаться")
+                messagebox.showinfo("Готово", "sing-box извлечён из EXE. Доступ к GitHub не требуется.")
+                return
+        except Exception as exc:
+            messagebox.showerror("Ошибка локальной установки", str(exc))
+            return
         self.busy = True
         self.set_status("Загрузка ядра…", "#ffcf70")
         self.connect_btn.configure(state="disabled")
