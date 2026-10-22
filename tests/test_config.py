@@ -140,6 +140,16 @@ class ProfileTests(unittest.TestCase):
         self.assertIn("cp.cloudflare.com", first_rule["domain_suffix"])
         self.assertIn("example.com", first_rule["domain_suffix"])
 
+    def test_base64_shadowsocks_full_uri(self):
+        import base64
+        encoded = base64.b64encode(b"aes-128-gcm:secret@example.org:8388").decode().rstrip("=")
+        config, _ = parse_uri("ss://" + encoded + "#test")
+        outbound = config["outbounds"][0]
+        self.assertEqual(outbound["server"], "example.org")
+        self.assertEqual(outbound["server_port"], 8388)
+        self.assertEqual(outbound["method"], "aes-128-gcm")
+        self.assertEqual(outbound["password"], "secret")
+
     def test_invalid_custom_domain_rejected(self):
         source = {"outbounds": [{"type": "vless", "tag": "proxy"}], "inbounds": []}
         with self.assertRaises(ValueError):
