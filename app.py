@@ -29,20 +29,165 @@ MIXED_PORT = 2080
 
 SERVICES = {
     "OpenAI / Codex": [
-        "openai.com", "chatgpt.com", "auth.openai.com", "platform.openai.com",
-        "api.openai.com", "oaistatic.com", "oaiusercontent.com"
+        "openai.com", "chatgpt.com", "chat.openai.com", "auth.openai.com",
+        "platform.openai.com", "api.openai.com", "oaistatic.com", "oaiusercontent.com",
+        "files.oaiusercontent.com", "cdn.openai.com", "openaiapi-site.azureedge.net",
+        "statsig.com", "featuregates.org", "intercom.io", "intercomcdn.com"
     ],
-    "Claude": ["claude.ai", "anthropic.com", "claudeusercontent.com"],
-    "Gemini": ["gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com"],
-    "Perplexity": ["perplexity.ai"],
+    "Claude / Anthropic": [
+        "claude.ai", "anthropic.com", "claudeusercontent.com", "anthropicusercontent.com",
+        "anthropic-static.com", "claudeassets.com", "claudeusercontent.net"
+    ],
+    "Google / Gemini / AI Studio": [
+        "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com",
+        "googlevideo.com", "google-analytics.com", "googletagmanager.com", "googleadservices.com",
+        "googleapis.cn", "googleusercontent.cn", "google.dev", "ai.google.dev",
+        "gemini.google.com", "aistudio.google.com", "generativelanguage.googleapis.com",
+        "makersuite.google.com", "notebooklm.google.com", "bard.google.com", "deepmind.google",
+        "googlecloud.com", "cloud.google.com", "accounts.google.com", "ogs.google.com"
+    ],
     "Telegram": [
-        "telegram.org", "t.me", "telegram.me", "telegram.dog", "telegra.ph",
-        "telesco.pe", "telegram-cdn.org", "cdn-telegram.org"
+        "telegram.org", "t.me", "telegram.me", "telegram.dog", "telegra.ph", "telesco.pe",
+        "telegram-cdn.org", "cdn-telegram.org", "telegram.space", "tg.dev", "tx.me",
+        "comments.app", "fragment.com", "ton.org"
     ],
-    "WhatsApp": ["whatsapp.com", "whatsapp.net", "wa.me", "web.whatsapp.com"],
-    "YouTube": ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com"],
+    "WhatsApp / Meta": [
+        "whatsapp.com", "whatsapp.net", "wa.me", "web.whatsapp.com", "whatsappbrand.com",
+        "fb.com", "facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "fb.watch",
+        "messenger.com", "m.me", "instagram.com", "cdninstagram.com", "ig.me", "threads.net",
+        "meta.ai", "meta.com", "oculus.com", "meta.net", "atdmt.com", "connect.facebook.net"
+    ],
+    "YouTube": [
+        "youtube.com", "youtu.be", "googlevideo.com", "ytimg.com", "youtubei.googleapis.com",
+        "youtube-nocookie.com", "youtubeeducation.com", "youtubekids.com", "youtubeembeddedplayer.googleapis.com",
+        "youtube.googleapis.com", "ggpht.com", "googleusercontent.com", "widevine.com",
+        "youtube-ui.l.google.com", "youtube.map.fastly.net", "yt3.ggpht.com"
+    ],
+    "Discord": [
+        "discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discord.media",
+        "discordcdn.com", "discordstatus.com", "discord.new", "discord.gift", "discord.tools",
+        "discordactivities.com", "discordsays.com", "discordmerch.com", "discord-attachments-uploads-prd.storage.googleapis.com"
+    ],
+    "X / Twitter": [
+        "x.com", "twitter.com", "t.co", "twimg.com", "abs.twimg.com", "video.twimg.com",
+        "pbs.twimg.com", "api.x.com", "api.twitter.com", "ads-twitter.com", "periscope.tv",
+        "pscp.tv", "tweetdeck.com"
+    ],
+    "TikTok": [
+        "tiktok.com", "tiktokv.com", "tiktokcdn.com", "tiktokcdn-us.com", "tiktokcdn-eu.com",
+        "musical.ly", "muscdn.com", "byteoversea.com", "ibytedtos.com", "ibyteimg.com",
+        "byteimg.com", "ttwstatic.com", "tiktokrow-cdn.com", "tiktokshop.com", "tiktokglobalshop.com",
+        "snssdk.com", "pstatp.com", "toutiao.com", "capcut.com", "capcut.net"
+    ],
+    "Reddit": [
+        "reddit.com", "redd.it", "redditmedia.com", "redditstatic.com", "redditinc.com",
+        "reddithelp.com", "reddituploads.com", "redditblog.com", "redditchat.com"
+    ],
+    "Spotify / Music": [
+        "spotify.com", "scdn.co", "spotifycdn.com", "spotifycdn.net", "pscdn.co",
+        "audio-ak-spotify-com.akamaized.net", "spotify.design", "spotifynewsroom.jp",
+        "deezer.com", "dzcdn.net", "music.youtube.com", "music.apple.com", "last.fm",
+        "soundcloud.com", "sndcdn.com", "bandcamp.com", "mixcloud.com", "tidal.com"
+    ],
+    "GitHub / Developer tools": [
+        "github.com", "githubusercontent.com", "githubassets.com", "github.io", "githubcopilot.com",
+        "copilot.microsoft.com", "github.dev", "githubstatus.com", "github.community", "gitlab.com",
+        "gitlab-static.net", "bitbucket.org", "atlassian.com", "stackoverflow.com", "stackexchange.com",
+        "npmjs.com", "npmjs.org", "nodejs.org", "pypi.org", "pythonhosted.org", "rubygems.org",
+        "crates.io", "rust-lang.org", "maven.org", "gradle.org", "docker.com", "docker.io",
+        "hub.docker.com", "dev.azure.com", "visualstudio.com", "vscode.dev", "code.visualstudio.com",
+        "jetbrains.com", "jetbrains.space", "replit.com", "codesandbox.io", "vercel.com", "netlify.app",
+        "render.com", "fly.io", "railway.app", "cloudflare.com", "workers.dev", "pages.dev"
+    ],
+    "AI: Claude, Perplexity, DeepSeek, Mistral": [
+        "perplexity.ai", "pplx.ai", "deepseek.com", "deepseek.ai", "chat.deepseek.com",
+        "mistral.ai", "chat.mistral.ai", "labs.perplexity.ai", "grok.com", "x.ai",
+        "cohere.com", "command-r.com", "you.com", "phind.com", "poe.com", "quora.com",
+        "character.ai", "characterai.io", "janitorai.com", "jasper.ai", "writesonic.com",
+        "copy.ai", "pi.ai", "inflection.ai", "blackbox.ai", "cursor.com", "windsurf.com",
+        "codeium.com", "tabnine.com", "huggingface.co", "hf.co", "replicate.com", "runpod.io",
+        "together.ai", "fireworks.ai", "groq.com", "cerebras.ai", "openrouter.ai", "siliconflow.com",
+        "novita.ai", "fal.ai", "fal.run", "lmarena.ai", "arena.ai", "chat.lmsys.org"
+    ],
+    "Microsoft / Copilot": [
+        "microsoft.com", "microsoftonline.com", "live.com", "bing.com", "bing.net",
+        "copilot.microsoft.com", "copilot.com", "office.com", "office.net", "outlook.com",
+        "windows.net", "azure.com", "azureedge.net", "azurefd.net", "msauth.net", "msftauth.net",
+        "msidentity.com", "xbox.com", "xboxlive.com", " xboxservices.com", "skype.com",
+        "teams.microsoft.com", "teams.live.com", "sharepoint.com", "onedrive.live.com",
+        "1drv.com", "sfx.ms", "visualstudio.com", "aka.ms"
+    ],
+    "Streaming / Movies": [
+        "netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxso.net",
+        "nflxext.com", "disneyplus.com", "disney-plus.net", "disney.com", "dssott.com",
+        "primevideo.com", "amazonvideo.com", "aiv-cdn.net", "hulu.com", "huluim.com",
+        "max.com", "hbomax.com", "discoveryplus.com", "peacocktv.com", "paramountplus.com",
+        "pluto.tv", "tubitv.com", "plex.tv", "crunchyroll.com", "vrv.co", "hidive.com",
+        "funimation.com", "bilibili.com", "biliapi.net", "iqiyi.com", "youku.com", "viki.com",
+        "dailymotion.com", "dmcdn.net", "vimeo.com", "vimeocdn.com", "twitch.tv", "ttvnw.net",
+        "jtvnw.net", "ext-twitch.tv", "kick.com", "rumble.com", "odysee.com", "lbry.tv"
+    ],
+    "Gaming / Steam / Epic": [
+        "steampowered.com", "steamcommunity.com", "steamstatic.com", "steamcontent.com",
+        "steam-chat.com", "steamserver.net", "steamusercontent.com", "steamdeck.com",
+        "epicgames.com", "epicgames.dev", "unrealengine.com", "fortnite.com", "eac-cdn.com",
+        "ea.com", "origin.com", "eaassets-a.akamaihd.net", "battle.net", "blizzard.com",
+        "blizzard.net", "riotgames.com", "leagueoflegends.com", "valorant.com", "riotcdn.net",
+        "ubisoft.com", "ubi.com", "uplay.com", "rockstargames.com", "socialclub.rockstargames.com",
+        "gog.com", "gog-statics.com", "itch.io", "itch.zone", "xbox.com", "xboxlive.com",
+        "playstation.com", "playstation.net", "sonyentertainmentnetwork.com", "nintendo.com",
+        "nintendo.net", "ea.com", "eaassets.com", "wargaming.net", "worldoftanks.com"
+    ],
+    "Minecraft / Roblox": [
+        "minecraft.net", "mojang.com", "minecraftservices.com", "minecraft-services.net",
+        "minecrafted.net", "minecraftprod.rustrician.net", "curseforge.com", "modrinth.com",
+        "fabricmc.net", "papermc.io", "hangar.papermc.io", "spigotmc.org", "planetminecraft.com",
+        "namemc.com", "optifine.net", "roblox.com", "rbxcdn.com", "roblox.cn", "rbx.com",
+        "robloxdev.com", "robloxapi.com", "rbxtrk.com"
+    ],
+    "Messaging / Social": [
+        "signal.org", "signal.art", "snapchat.com", "sc-cdn.net", "snapkit.com",
+        "pinterest.com", "pinimg.com", "linkedin.com", "licdn.com", "tumblr.com", "tumblr.net",
+        "flickr.com", "flickr.net", "mastodon.social", "bsky.app", "blueskyweb.xyz",
+        "threads.net", "line.me", "line-apps.com", "kakao.com", "kakaocdn.net", "vk.com",
+        "vk.ru", "userapi.com", "ok.ru", "odnoklassniki.ru", "weibo.com", "weibocdn.com",
+        "wechat.com", "weixin.qq.com", "qq.com", "qpic.cn", "discord.com", "meetup.com"
+    ],
+    "Search / News": [
+        "duckduckgo.com", "startpage.com", "brave.com", "search.brave.com", "ecosia.org",
+        "yandex.com", "yandex.ru", "yastatic.net", "yandexcloud.net", "ya.ru", "rambler.ru",
+        "proton.me", "protonmail.com", "protonvpn.com", "fastmail.com", "theguardian.com",
+        "nytimes.com", "washingtonpost.com", "bbc.com", "bbc.co.uk", "reuters.com", "apnews.com",
+        "bloomberg.com", "economist.com", "wired.com", "arstechnica.com", "techcrunch.com"
+    ],
+    "Cloud / Storage": [
+        "dropbox.com", "dropboxapi.com", "dropboxusercontent.com", "box.com", "mega.io",
+        "mega.nz", "mediafire.com", "wetransfer.com", "sendspace.com", "pcloud.com",
+        "sync.com", "icloud.com", "icloud-content.com", "apple-cloudkit.com", "drive.google.com",
+        "storage.googleapis.com", "blob.core.windows.net", "amazonaws.com", "cloudfront.net",
+        "digitaloceanspaces.com", "backblazeb2.com", "wasabisys.com"
+    ],
+    "Design / Productivity": [
+        "notion.so", "notion.site", "figma.com", "figmausercontent.com", "canva.com",
+        "canva-apps.com", "miro.com", "linear.app", "asana.com", "trello.com", "slack.com",
+        "slack-edge.com", "zoom.us", "zoom.com", "webex.com", "grammarly.com", "grammarly.io",
+        "medium.com", "substack.com", "readwise.io", "evernote.com", "todoist.com", "calendly.com",
+        "typeform.com", "airtable.com", "monday.com", "clickup.com", "obsidian.md"
+    ],
+    "Apple services": [
+        "apple.com", "icloud.com", "apple-cloudkit.com", "mzstatic.com", "itunes.apple.com",
+        "apps.apple.com", "appstore.com", "apple.news", "apple-dns.net", "cdn-apple.com",
+        "push.apple.com", "identity.apple.com"
+    ]
 }
 
+THEMES = {
+    "Neon Pink": {"bg": "#101017", "panel": "#1a1822", "panel2": "#24202e", "fg": "#f7f2fb", "muted": "#b1a7bd", "accent": "#ff3f83", "green": "#46dda0", "border": "#473044"},
+    "Ocean": {"bg": "#09121b", "panel": "#101f2c", "panel2": "#183044", "fg": "#ecf7ff", "muted": "#91b0c5", "accent": "#23b8e6", "green": "#4bd6b0", "border": "#284a5f"},
+    "Emerald": {"bg": "#0c1512", "panel": "#14231d", "panel2": "#1d332a", "fg": "#eefbf4", "muted": "#94b5a2", "accent": "#2dd4a3", "green": "#73e6a3", "border": "#2f5949"},
+    "Amber": {"bg": "#17110a", "panel": "#251a10", "panel2": "#342416", "fg": "#fff7eb", "muted": "#c5a88b", "accent": "#ffad39", "green": "#7be0a1", "border": "#5a3f27"},
+    "Mono": {"bg": "#101010", "panel": "#1b1b1b", "panel2": "#272727", "fg": "#f5f5f5", "muted": "#aaaaaa", "accent": "#eeeeee", "green": "#72d69b", "border": "#3b3b3b"}
+}
 BG = "#111318"
 PANEL = "#1a1d24"
 PANEL_2 = "#20242d"
