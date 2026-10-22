@@ -52,6 +52,47 @@ ACCENT = "#ff4f64"
 GREEN = "#45d483"
 BORDER = "#343a46"
 
+# Public community subscription sources. These are third-party nodes, not servers operated by Cheburek.
+PUBLIC_NODE_FEEDS = [
+    "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/mini.txt",
+    "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
+    "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/v2ray-base64.txt",
+]
+SUPPORTED_NODE_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
+PROBE_CONFIG_PATH = APP_DIR / "probe-config.json"
+
+
+def extract_proxy_uris(body):
+    """Extract supported public proxy URIs from plain-text or base64 subscriptions."""
+    body = body.lstrip("\ufeff").strip()
+    if not body:
+        return []
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    found = []
+    for line in lines:
+        candidate = line if line.lower().startswith(SUPPORTED_NODE_SCHEMES) else line.split("#", 1)[0]
+        if candidate.lower().startswith(SUPPORTED_NODE_SCHEMES) and len(candidate) <= 8192:
+            found.append(candidate)
+    if not found and len(body) <= 8_000_000:
+        compact = "".join(body.split())
+        if re.fullmatch(r"[A-Za-z0-9_+/=-]+", compact or ""):
+            try:
+                decoded = base64.urlsafe_b64decode(compact + "=" * ((4 - len(compact) % 4) % 4)).decode("utf-8", "ignore")
+                for line in decoded.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith(SUPPORTED_NODE_SCHEMES) and len(line) <= 8192:
+                        found.append(line)
+            except Exception:
+                pass
+    deduped = []
+    seen = set()
+    for uri in found:
+        if uri not in seen:
+            seen.add(uri)
+            deduped.append(uri)
+    return deduped
+
 
 def url_query(parsed):
     return {k: v[-1] for k, v in urllib.parse.parse_qs(parsed.query, keep_blank_values=True).items()}
@@ -353,10 +394,10 @@ class CheburekApp:
 
         banner = tk.Frame(self.root, bg="#271920", highlightbackground="#63303e", highlightthickness=1)
         banner.pack(fill="x", padx=22, pady=(0, 14))
-        tk.Label(banner, text="ВАЖНО", bg="#271920", fg="#ff9eac", font=("Segoe UI Semibold", 9)).pack(
+        tk.Label(banner, text="ВНИМАНИЕ", bg="#271920", fg="#ff9eac", font=("Segoe UI Semibold", 9)).pack(
             side="left", padx=(12, 8), pady=10)
-        tk.Label(banner, text="Нужен собственный прокси-профиль. Серверы в программу не встроены; проверка телефона Codex этим не обходится.",
-                 bg="#271920", fg="#f4dfe3", font=("Segoe UI", 9), anchor="w", wraplength=850).pack(
+        tk.Label(banner, text="Нет своего профиля? Нажми «Автоподбор узла»: программа скачает публичные узлы и проверит их с твоего ПК. Это сторонние серверы — не используй их для банков и чувствительных аккаунтов. Проверку телефона Codex они не обходят.",
+                 bg="#271920", fg="#f4dfe3", font=("Segoe UI", 9), anchor="w", wraplength=850, justify="left").pack(
             side="left", fill="x", expand=True, padx=(0, 10), pady=8)
 
         body = tk.Frame(self.root, bg=BG)
@@ -393,9 +434,8 @@ class CheburekApp:
         tools = tk.Frame(right, bg=PANEL)
         tools.pack(fill="x", padx=16, pady=(0, 8))
         ttk.Button(tools, text="Импорт JSON", command=self.import_json).pack(side="left")
-        ttk.Button(tools, text="Выбрать sing-box.exe", command=self.import_core_file).pack(side="left", padx=(7, 0))
-        ttk.Button(tools, text="Очистить", command=self.clear_input).pack(side="left", padx=(7, 0))
-        ttk.Button(tools, text="Скачать ядро", command=self.install_core).pack(side="right")
+        ttk.Button(tools, text="Автоподбор узла", style="Accent.TButton", command=self.auto_find_node).pack(side="left", padx=(7, 0))
+        ttk.Button(tools, text="Ещё", command=self.more_tools).pack(side="left", padx=(7, 0))
 
         editor_frame = tk.Frame(right, bg=PANEL_2, highlightbackground=BORDER, highlightthickness=1)
         editor_frame.pack(fill="both", expand=True, padx=16, pady=(0, 10))
@@ -466,6 +506,141 @@ class CheburekApp:
         self.editor.delete("1.0", "end")
         self.loaded_path = ""
         self.profile_var.set("Профиль не загружен")
+
+    def more_tools(self):
+        menu = tk.Menu(self.root, tearoff=False, bg=PANEL_2, fg=FG, activebackground=ACCENT, activeforeground="white")
+        menu.add_command(label="Выбрать sing-box.exe", command=self.import_core_file)
+        menu.add_command(label="Скачать ядро вручную", command=self.install_core)
+        menu.add_command(label="Очистить профиль", command=self.clear_input)
+        try:
+            menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+        finally:
+            menu.grab_release()
+
+    def auto_find_node(self):
+        if self.busy:
+            return
+        if self.process and self.process.poll() is None:
+            messagebox.showinfo("Сначала отключись", "Отключи текущее соединение перед автоматическим поиском нового узла.")
+            return
+        try:
+            ensure_core_available()
+            if not CORE.is_file():
+                messagebox.showwarning("Ядро не найдено", "В этой сборке нет sing-box. Нажми «Ещё» → «Выбрать sing-box.exe» или скачай ядро вручную.")
+                return
+        except Exception as exc:
+            messagebox.showerror("Ошибка", str(exc))
+            return
+        selected = [name for name, var in self.service_vars.items() if var.get()]
+        custom_domains = self.custom_entry.get().strip()
+        if not selected and not custom_domains:
+            messagebox.showwarning("Нет правил", "Выбери хотя бы один сервис или введи свои домены.")
+            return
+        self.busy = True
+        self.connect_btn.configure(state="disabled")
+        self.set_status("Ищу и проверяю узлы…", "#ffcf70")
+        threading.Thread(target=self._auto_find_worker, args=(selected, custom_domains), daemon=True).start()
+
+    def _auto_find_worker(self, selected, custom_domains):
+        errors = []
+        candidates = []
+        for source in PUBLIC_NODE_FEEDS:
+            try:
+                request = urllib.request.Request(source, headers={"User-Agent": "CheburekAccess/1.0", "Accept": "text/plain,*/*"})
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    data = response.read(8_000_001)
+                if len(data) > 8_000_000:
+                    errors.append("Слишком большая подписка: " + urllib.parse.urlparse(source).netloc)
+                    continue
+                candidates.extend(extract_proxy_uris(data.decode("utf-8-sig", "replace")))
+                candidates = list(dict.fromkeys(candidates))
+                if len(candidates) >= 18:
+                    break
+            except Exception as exc:
+                errors.append(f"{urllib.parse.urlparse(source).netloc}: {exc}")
+        candidates = candidates[:24]
+        if not candidates:
+            detail = "\n".join(errors[-3:]) or "В публичных списках не найдено поддерживаемых ссылок."
+            self.root.after(0, lambda e=detail: self._auto_find_failed("Не удалось получить список узлов. Проверь доступ к зеркалам подписок.\n\n" + e))
+            return
+
+        total = len(candidates)
+        for index, uri in enumerate(candidates, 1):
+            self.root.after(0, lambda i=index, t=total: self.set_status(f"Проверка узла {i}/{t}…", "#ffcf70"))
+            try:
+                data, _ = parse_uri(uri)
+                candidate_config = make_routing_config(data, selected, custom_domains)
+                PROBE_CONFIG_PATH.write_text(json.dumps(candidate_config, ensure_ascii=False, indent=2), encoding="utf-8")
+                check = subprocess.run([str(CORE), "check", "-c", str(PROBE_CONFIG_PATH)], capture_output=True,
+                                       text=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                if check.returncode != 0:
+                    continue
+                with open(LOG_PATH, "a", encoding="utf-8") as log_file:
+                    log_file.write("\n--- Cheburek public node probe " + time.strftime("%Y-%m-%d %H:%M:%S") + " ---\n")
+                log_handle = open(LOG_PATH, "a", encoding="utf-8")
+                probe = subprocess.Popen([str(CORE), "run", "-c", str(PROBE_CONFIG_PATH)], stdout=log_handle,
+                                          stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                log_handle.close()
+                try:
+                    ready = False
+                    for _ in range(18):
+                        if probe.poll() is not None:
+                            break
+                        try:
+                            with socket.create_connection(("127.0.0.1", MIXED_PORT), timeout=0.25):
+                                ready = True
+                                break
+                        except OSError:
+                            time.sleep(0.2)
+                    if not ready:
+                        continue
+                    proxies = {"http": f"http://127.0.0.1:{MIXED_PORT}", "https": f"http://127.0.0.1:{MIXED_PORT}"}
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler(proxies))
+                    works = False
+                    for target in ("https://cp.cloudflare.com/generate_204", "https://example.com/"):
+                        try:
+                            req = urllib.request.Request(target, headers={"User-Agent": "CheburekAccess/1.0"})
+                            with opener.open(req, timeout=4) as response:
+                                if 200 <= response.status < 400:
+                                    works = True
+                                    break
+                        except Exception:
+                            pass
+                    if works:
+                        self.root.after(0, lambda u=uri, i=index, t=total: self._auto_find_success(u, i, t))
+                        return
+                finally:
+                    try:
+                        if probe.poll() is None:
+                            probe.terminate()
+                            try:
+                                probe.wait(timeout=2)
+                            except subprocess.TimeoutExpired:
+                                probe.kill()
+                    except Exception:
+                        pass
+            except Exception as exc:
+                errors.append(str(exc))
+        detail = "\n".join(errors[-3:])
+        self.root.after(0, lambda d=detail: self._auto_find_failed(
+            "Не найден рабочий узел среди проверенных кандидатов. Бесплатные узлы часто отключаются; попробуй ещё раз позже.\n\n" + d))
+
+    def _auto_find_success(self, uri, index, total):
+        self.busy = False
+        self.connect_btn.configure(state="normal")
+        self.editor.delete("1.0", "end")
+        self.editor.insert("1.0", uri)
+        self.loaded_path = "public-auto-discovery"
+        self.profile_var.set(f"Бесплатный публичный узел проверен • кандидат {index}/{total}")
+        self.set_status("Узел найден", GREEN)
+        messagebox.showinfo("Узел найден", "Нашёл узел, который ответил на HTTPS-проверку через твою сеть. Сейчас попробую подключить его.\n\nЭто публичный сторонний сервер; стабильность не гарантируется.")
+        self.root.after(150, self.connect)
+
+    def _auto_find_failed(self, error):
+        self.busy = False
+        self.connect_btn.configure(state="normal")
+        self.set_status("Рабочий узел не найден", ACCENT)
+        messagebox.showerror("Автоподбор не удался", error + "\n\nЕсли зеркала подписок недоступны из твоей сети, этот режим не сможет загрузить список. Не вводи пароль от чувствительных аккаунтов через публичные узлы.")
 
     def import_core_file(self):
         path = filedialog.askopenfilename(
