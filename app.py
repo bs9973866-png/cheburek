@@ -749,27 +749,68 @@ class CheburekApp:
         body.pack(fill="both", expand=True, padx=22, pady=(0, 14))
         left = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         left.pack(side="left", fill="y", padx=(0, 12))
-        left.configure(width=280)
+        left.configure(width=320)
         left.pack_propagate(False)
         right = tk.Frame(body, bg=PANEL, highlightbackground=BORDER, highlightthickness=1)
         right.pack(side="left", fill="both", expand=True)
 
         tk.Label(left, text="МАРШРУТИЗАЦИЯ", bg=PANEL, fg=FG, font=("Segoe UI Semibold", 12)).pack(
-            anchor="w", padx=16, pady=(16, 4))
-        tk.Label(left, text="Какие домены отправлять через прокси", bg=PANEL, fg=MUTED,
-                 font=("Segoe UI", 9), wraplength=240, justify="left").pack(anchor="w", padx=16, pady=(0, 10))
+            anchor="w", padx=16, pady=(14, 4))
+        tk.Label(left, text=f"Каталог: {len(SERVICES)} категорий / {len(set(d for ds in SERVICES.values() for d in ds))} доменов",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w", padx=16, pady=(0, 7))
+        service_buttons = tk.Frame(left, bg=PANEL)
+        service_buttons.pack(fill="x", padx=13, pady=(0, 3))
+        ttk.Button(service_buttons, text="Выбрать всё", command=self.select_all_services).pack(side="left")
+        ttk.Button(service_buttons, text="Снять всё", command=self.clear_all_services).pack(side="left", padx=(5, 0))
+
+        services_wrap = tk.Frame(left, bg=PANEL)
+        services_wrap.pack(fill="x", padx=10, pady=(0, 7))
+        self.services_canvas = tk.Canvas(services_wrap, bg=PANEL, highlightthickness=0, bd=0, height=215)
+        services_scroll = ttk.Scrollbar(services_wrap, orient="vertical", command=self.services_canvas.yview)
+        self.services_canvas.configure(yscrollcommand=services_scroll.set)
+        self.services_canvas.pack(side="left", fill="both", expand=True)
+        services_scroll.pack(side="right", fill="y")
+        self.services_inner = tk.Frame(self.services_canvas, bg=PANEL)
+        self.services_window = self.services_canvas.create_window((0, 0), window=self.services_inner, anchor="nw")
+        self.services_inner.bind("<Configure>", lambda _e: self.services_canvas.configure(
+            scrollregion=self.services_canvas.bbox("all")))
+        self.services_canvas.bind("<Configure>", lambda e: self.services_canvas.itemconfigure(
+            self.services_window, width=e.width))
+        self.services_canvas.bind("<MouseWheel>", lambda e: self.services_canvas.yview_scroll(
+            int(-1 * (e.delta / 120)), "units"))
         for name, var in self.service_vars.items():
-            ttk.Checkbutton(left, text=name, variable=var).pack(anchor="w", padx=16, pady=5)
-        tk.Label(left, text="Свои домены", bg=PANEL, fg=FG, font=("Segoe UI Semibold", 10)).pack(
-            anchor="w", padx=16, pady=(13, 4))
+            checkbox = ttk.Checkbutton(self.services_inner, text=name, variable=var, command=self._save_state)
+            checkbox.pack(anchor="w", padx=10, pady=2, fill="x")
+            checkbox.bind("<MouseWheel>", lambda e: self.services_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+
+        tk.Label(left, text="СВОИ ДОМЕНЫ", bg=PANEL, fg=FG, font=("Segoe UI Semibold", 10)).pack(
+            anchor="w", padx=16, pady=(3, 4))
         self.custom_entry = ttk.Entry(left)
         self.custom_entry.pack(fill="x", padx=16)
-        tk.Label(left, text="Пример: example.com, service.org", bg=PANEL, fg=MUTED,
-                 font=("Segoe UI", 8), wraplength=240, justify="left").pack(anchor="w", padx=16, pady=(5, 12))
-        ttk.Checkbutton(left, text="Включить системный прокси Windows", variable=self.use_system_proxy).pack(
-            anchor="w", padx=16, pady=(4, 3))
-        tk.Label(left, text="Локальный адрес: 127.0.0.1:2080\nРежим: системный HTTP/SOCKS-прокси",
-                 bg=PANEL, fg=MUTED, font=("Consolas", 9), justify="left").pack(anchor="w", padx=16, pady=(5, 15))
+        self.custom_entry.bind("<FocusOut>", lambda _e: self._save_state())
+        tk.Label(left, text="Через запятую или пробел: service.example, api.example.com",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=275, justify="left").pack(
+            anchor="w", padx=16, pady=(4, 7))
+
+        tk.Label(left, text="РЕЖИМ ПОДКЛЮЧЕНИЯ", bg=PANEL, fg=FG,
+                 font=("Segoe UI Semibold", 10)).pack(anchor="w", padx=16, pady=(0, 4))
+        self.mode_combo = ttk.Combobox(
+            left, textvariable=self.mode_var,
+            values=["Весь трафик (TUN)", "Только выбранные домены (TUN)", "Системный прокси (браузеры)"],
+            state="readonly", width=31
+        )
+        self.mode_combo.pack(fill="x", padx=16)
+        self.mode_combo.bind("<<ComboboxSelected>>", lambda _e: self._save_state())
+        tk.Label(left, text="TUN охватывает обычные приложения. Для него Windows попросит права администратора. Системный прокси подходит только приложениям, которые его используют.",
+                 bg=PANEL, fg=MUTED, font=("Segoe UI", 8), wraplength=275, justify="left").pack(
+            anchor="w", padx=16, pady=(4, 7))
+
+        ttk.Checkbutton(left, text="Включать системный прокси в браузерном режиме",
+                        variable=self.use_system_proxy, command=self._save_state).pack(
+            anchor="w", padx=16, pady=(0, 4))
+        tk.Label(left, text="Локальный диагностический прокси: 127.0.0.1:2080",
+                 bg=PANEL, fg=MUTED, font=("Consolas", 8), justify="left", wraplength=275).pack(
+            anchor="w", padx=16, pady=(0, 10))
 
         tk.Label(right, text="ПРОФИЛЬ ПОДКЛЮЧЕНИЯ", bg=PANEL, fg=FG,
                  font=("Segoe UI Semibold", 12)).pack(anchor="w", padx=16, pady=(16, 4))
