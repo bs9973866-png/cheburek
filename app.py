@@ -272,6 +272,21 @@ def make_routing_config(data, enabled_services, custom_domains):
     return config
 
 
+def make_probe_config(data, enabled_services, custom_domains):
+    """Build a temporary test config that forces probe sites through the selected proxy."""
+    config = make_routing_config(data, enabled_services, custom_domains)
+    route = config.setdefault("route", {})
+    rules = route.setdefault("rules", [])
+    if not isinstance(rules, list):
+        rules = []
+        route["rules"] = rules
+    rules.insert(0, {
+        "domain_suffix": ["cp.cloudflare.com", "example.com"],
+        "outbound": proxy_tag_for(config),
+    })
+    return config
+
+
 def ensure_app_dir():
     APP_DIR.mkdir(parents=True, exist_ok=True)
     BIN_DIR.mkdir(parents=True, exist_ok=True)
@@ -569,7 +584,7 @@ class CheburekApp:
             self.root.after(0, lambda i=index, t=total: self.set_status(f"Проверка узла {i}/{t}…", "#ffcf70"))
             try:
                 data, _ = parse_uri(uri)
-                candidate_config = make_routing_config(data, selected, custom_domains)
+                candidate_config = make_probe_config(data, selected, custom_domains)
                 PROBE_CONFIG_PATH.write_text(json.dumps(candidate_config, ensure_ascii=False, indent=2), encoding="utf-8")
                 check = subprocess.run([str(CORE), "check", "-c", str(PROBE_CONFIG_PATH)], capture_output=True,
                                        text=True, timeout=10, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
