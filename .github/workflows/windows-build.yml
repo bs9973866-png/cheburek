@@ -6,6 +6,8 @@ on:
     paths:
       - "app.py"
       - "requirements.txt"
+      - "README.md"
+      - "tests/**"
       - ".github/workflows/windows-build.yml"
   workflow_dispatch:
 
