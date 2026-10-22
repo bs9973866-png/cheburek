@@ -381,45 +381,78 @@ def proxy_tag_for(config):
     raise ValueError("В конфиге не найден исходящий прокси (outbound).")
 
 
-def make_routing_config(data, enabled_services, custom_domains):
+def make_routing_config(data, enabled_services, custom_domains, mode="Весь трафик (TUN)"):
+    """Build a current sing-box 1.14-compatible config for system proxy or device-wide TUN."""
     config = json.loads(json.dumps(data))
     outbounds = config.setdefault("outbounds", [])
     if not any(o.get("tag") == "direct" for o in outbounds):
         outbounds.append({"type": "direct", "tag": "direct"})
     proxy_tag = proxy_tag_for(config)
-    inbounds = config.setdefault("inbounds", [])
-    mixed = next((i for i in inbounds if i.get("type") == "mixed"), None)
-    if mixed is None:
-        inbounds.append({"type": "mixed", "tag": "cheburek-mixed",
-                         "listen": "127.0.0.1", "listen_port": MIXED_PORT})
+
+    # Replace imported inbounds with one controlled by the selected operating mode.
+    if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)"):
+        config["inbounds"] = [{
+            "type": "tun",
+            "tag": "cheburek-tun",
+            "interface_name": "Cheburek",
+            "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+            "auto_route": True,
+            "strict_route": True,
+            "stack": "mixed",
+            "dns_mode": "hijack"
+        }]
     else:
-        mixed["listen"] = "127.0.0.1"
-        mixed["listen_port"] = MIXED_PORT
+        config["inbounds"] = [{
+            "type": "mixed",
+            "tag": "cheburek-mixed",
+            "listen": "127.0.0.1",
+            "listen_port": MIXED_PORT
+        }]
+
     route = config.setdefault("route", {})
     existing = route.get("rules", [])
     if not isinstance(existing, list):
         existing = []
+    # Always sniff hostnames before matching domain rules when handling raw app traffic.
     rules = []
+    if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)"):
+        rules.append({"action": "sniff"})
+        # Keep local devices and LAN services reachable instead of sending private IPs outside.
+        rules.append({"ip_is_private": True, "action": "route", "outbound": "direct"})
+
+    all_domains = []
     for name in enabled_services:
-        domains = SERVICES.get(name, [])
-        if domains:
-            rules.append({"domain_suffix": domains, "outbound": proxy_tag})
+        all_domains.extend(SERVICES.get(name, []))
     if custom_domains:
-        domains = sorted(set(d.strip().lower().lstrip(".") for d in re.split(r"[,;\s]+", custom_domains) if d.strip()))
-        invalid = [d for d in domains if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) or ".." in d]
-        if invalid:
-            raise ValueError("Некорректный домен: " + invalid[0])
-        if domains:
-            rules.append({"domain_suffix": domains, "outbound": proxy_tag})
+        all_domains.extend(d.strip().lower().lstrip(".") for d in re.split(r"[,;\s]+", custom_domains) if d.strip())
+    domains = sorted(set(d.strip().lower().lstrip(".") for d in all_domains if d.strip()))
+    invalid = [d for d in domains if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) or ".." in d]
+    if invalid:
+        raise ValueError("Некорректный домен: " + invalid[0])
+
+    # Split mode routes selected domain suffixes through the proxy on every app, not just browsers.
+    # Full-tunnel mode sends all non-LAN traffic to the proxy, which also handles native apps
+    # that ignore Windows' HTTP proxy settings (e.g. many Telegram/WhatsApp builds).
+    if mode != "Весь трафик (TUN)" and domains:
+        rules.append({
+            "domain_suffix": domains,
+            "action": "route",
+            "outbound": proxy_tag
+        })
+
     route["rules"] = rules + existing
-    route["final"] = "direct"
+    route["auto_detect_interface"] = True
+    if mode == "Весь трафик (TUN)":
+        route["final"] = proxy_tag
+    else:
+        route["final"] = "direct"
     config["outbounds"] = outbounds
     return config
 
 
 def make_probe_config(data, enabled_services, custom_domains):
-    """Build a temporary test config that forces probe sites through the selected proxy."""
-    config = make_routing_config(data, enabled_services, custom_domains)
+    """Build a temporary mixed-inbound config, forcing probe destinations through the tested proxy."""
+    config = make_routing_config(data, enabled_services, custom_domains, "Системный прокси (браузеры)")
     route = config.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not isinstance(rules, list):
@@ -427,6 +460,7 @@ def make_probe_config(data, enabled_services, custom_domains):
         route["rules"] = rules
     rules.insert(0, {
         "domain_suffix": ["cp.cloudflare.com", "example.com"],
+        "action": "route",
         "outbound": proxy_tag_for(config),
     })
     return config
