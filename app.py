@@ -390,7 +390,13 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
         outbounds.append({"type": "direct", "tag": "direct"})
     proxy_tag = proxy_tag_for(config)
 
-    # Replace imported inbounds with one controlled by the selected operating mode.
+    # The mixed inbound remains available on loopback for upstream health checks in every mode.
+    mixed_inbound = {
+        "type": "mixed",
+        "tag": "cheburek-mixed",
+        "listen": "127.0.0.1",
+        "listen_port": MIXED_PORT
+    }
     if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)"):
         config["inbounds"] = [{
             "type": "tun",
@@ -401,26 +407,24 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
             "strict_route": True,
             "stack": "mixed",
             "dns_mode": "hijack"
-        }]
+        }, mixed_inbound]
     else:
-        config["inbounds"] = [{
-            "type": "mixed",
-            "tag": "cheburek-mixed",
-            "listen": "127.0.0.1",
-            "listen_port": MIXED_PORT
-        }]
+        config["inbounds"] = [mixed_inbound]
 
     route = config.setdefault("route", {})
-    existing = route.get("rules", [])
-    if not isinstance(existing, list):
-        existing = []
-    # Always sniff hostnames before matching domain rules when handling raw app traffic.
+    # Build routing rules ourselves so imported defaults do not silently override the chosen mode.
     rules = []
     if mode in ("Весь трафик (TUN)", "Только выбранные домены (TUN)"):
         rules.append({"action": "sniff"})
         # Keep local devices and LAN services reachable instead of sending private IPs outside.
         rules.append({"ip_is_private": True, "action": "route", "outbound": "direct"})
 
+    # Health-check traffic is explicitly routed through the selected proxy in every mode.
+    rules.append({
+        "domain_suffix": ["cp.cloudflare.com", "example.com"],
+        "action": "route",
+        "outbound": proxy_tag
+    })
     all_domains = []
     for name in enabled_services:
         all_domains.extend(SERVICES.get(name, []))
@@ -441,7 +445,7 @@ def make_routing_config(data, enabled_services, custom_domains, mode="Весь �
             "outbound": proxy_tag
         })
 
-    route["rules"] = rules + existing
+    route["rules"] = rules
     route["auto_detect_interface"] = True
     if mode == "Весь трафик (TUN)":
         route["final"] = proxy_tag
