@@ -1,4 +1,5 @@
 import base64
+import ctypes
 import hashlib
 import json
 import os
@@ -528,24 +529,51 @@ def restore_if_stale():
         pass
 
 
+def is_admin():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def resource_path(relative):
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / relative
+
+
 class CheburekApp:
     def __init__(self, root):
         self.root = root
         ensure_app_dir()
         ensure_core_available()
         restore_if_stale()
+        self.state_path = APP_DIR / "ui-state.json"
+        self.saved_state = {}
+        try:
+            self.saved_state = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except Exception:
+            self.saved_state = {}
+        self.restore_admin = "--restore-admin" in sys.argv[1:]
         self.process = None
         self.proxy_changed = False
         self.loaded_path = ""
         self.busy = False
         self.status_var = tk.StringVar(value="Отключено")
         self.profile_var = tk.StringVar(value="Профиль не загружен")
-        self.use_system_proxy = tk.BooleanVar(value=True)
-        self.service_vars = {name: tk.BooleanVar(value=True) for name in SERVICES}
+        self.use_system_proxy = tk.BooleanVar(value=bool(self.saved_state.get("use_system_proxy", True)))
+        self.mode_var = tk.StringVar(value=self.saved_state.get("mode", "Весь трафик (TUN)"))
+        self.theme_var = tk.StringVar(value=self.saved_state.get("theme", "Neon Pink"))
+        selected = set(self.saved_state.get("selected_services", SERVICES.keys()))
+        self.service_vars = {name: tk.BooleanVar(value=name in selected) for name in SERVICES}
+        self._set_global_theme(self.theme_var.get())
         self._style()
         self._build()
+        self._restore_ui_state()
+        self.apply_theme(self.theme_var.get(), initial=True)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(400, self.refresh_core_state)
+        if self.restore_admin:
+            self.root.after(900, self.connect)
 
     def _style(self):
         self.root.title(APP_NAME)
