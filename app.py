@@ -198,15 +198,43 @@ ACCENT = "#ff4f64"
 GREEN = "#45d483"
 BORDER = "#343a46"
 
-# Public community subscription sources. These are third-party nodes, not servers operated by Cheburek.
+# Public, third-party sources. JSON profiles are tried first because their urltest
+# groups can select a live node without blindly trusting the first N links.
+PUBLIC_PROFILE_FEEDS = [
+    "https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
+    "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/singbox.json",
+    "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/singbox.json",
+]
 PUBLIC_NODE_FEEDS = [
-    "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/mini.txt",
-    "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
+    "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://cdn.jsdelivr.net/gh/morpheusadam/v2ray-config@main/subs/bundles/best.txt",
+    "https://raw.githack.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
+    "https://ghproxy.net/https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/best.txt",
     "https://raw.githubusercontent.com/morpheusadam/v2ray-config/main/subs/bundles/mini.txt",
     "https://cdn.jsdelivr.net/gh/Au1rxx/free-vpn-subscriptions@main/output/v2ray-base64.txt",
+    "https://ghproxy.net/https://raw.githubusercontent.com/Au1rxx/free-vpn-subscriptions/main/output/v2ray-base64.txt",
 ]
 SUPPORTED_NODE_SCHEMES = ("vless://", "vmess://", "trojan://", "ss://")
 PROBE_CONFIG_PATH = APP_DIR / "probe-config.json"
+AUTO_PROFILE_PATH = APP_DIR / "auto-profile.json"
+AUTO_PROFILE_TOKEN = "::CHEBUREK_AUTO_PROFILE::"
+MAX_FEED_BYTES = 30_000_000
+
+
+def extract_profile_candidates(body):
+    """Read either a complete sing-box JSON config or a plain/base64 subscription."""
+    body = body.lstrip("\ufeff").strip()
+    candidates = []
+    if body.startswith("{"):
+        try:
+            data = json.loads(body)
+            if isinstance(data, dict) and isinstance(data.get("outbounds"), list) and data["outbounds"]:
+                candidates.append(json.dumps(data, ensure_ascii=False))
+        except Exception:
+            pass
+    candidates.extend(extract_proxy_uris(body))
+    return list(dict.fromkeys(candidates))
 
 
 def extract_proxy_uris(body):
@@ -372,11 +400,22 @@ def add_transport(out, q):
 
 
 def proxy_tag_for(config):
-    preferred = {"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "hysteria2", "tuic", "wireguard", "selector", "urltest"}
-    for ob in config.get("outbounds", []):
+    outbounds = config.get("outbounds", [])
+    # Prefer the published auto-testing pool over the first individual node.
+    for desired in ("urltest", "selector"):
+        choices = [ob for ob in outbounds if ob.get("type") == desired and ob.get("tag")]
+        if choices:
+            # Prefer conventional auto/proxy tags, then retain source order.
+            choices.sort(key=lambda ob: (
+                0 if ob.get("tag", "").lower() in {"auto", "urltest", "best", "proxy", "select", "manual"} else 1,
+                ob.get("tag", "").lower() not in {"auto", "urltest", "best"}
+            ))
+            return choices[0]["tag"]
+    preferred = {"vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria", "hysteria2", "tuic", "wireguard"}
+    for ob in outbounds:
         if ob.get("type") in preferred and ob.get("tag"):
             return ob["tag"]
-    for ob in config.get("outbounds", []):
+    for ob in outbounds:
         if ob.get("tag") and ob.get("type") not in {"direct", "block", "dns"}:
             return ob["tag"]
     raise ValueError("В конфиге не найден исходящий прокси (outbound).")
