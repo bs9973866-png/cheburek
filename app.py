@@ -1241,15 +1241,29 @@ class CheburekApp:
         )
         self.root.after(0, lambda e=reason: self._auto_find_failed(reason))
 
-    def _auto_find_success(self, uri, index, total):
+    def _auto_find_success(self, candidate, index, total, candidate_kind="отдельный узел"):
         self.busy = False
         self.connect_btn.configure(state="normal")
-        self.editor.delete("1.0", "end")
-        self.editor.insert("1.0", uri)
-        self.loaded_path = "public-auto-discovery"
-        self.profile_var.set(f"Бесплатный публичный узел проверен • кандидат {index}/{total}")
+        self.auto_profile_active = candidate.lstrip().startswith("{")
+        if self.auto_profile_active:
+            # A full subscription can be megabytes. Keep it in AppData instead of freezing the text widget.
+            AUTO_PROFILE_PATH.write_text(candidate, encoding="utf-8")
+            self.editor.delete("1.0", "end")
+            self.editor.insert("1.0", "Автоматический профиль sing-box\nПул узлов сохранён локально. Нажми «Подключиться», чтобы использовать его.")
+            self.loaded_path = "public-auto-discovery-json"
+            self.profile_var.set(f"Проверен автоматический пул узлов • источник {index}/{total}")
+        else:
+            self.editor.delete("1.0", "end")
+            self.editor.insert("1.0", candidate)
+            self.loaded_path = "public-auto-discovery"
+            self.profile_var.set(f"Проверен публичный узел • кандидат {index}/{total}")
         self.set_status("Узел найден", GREEN)
-        messagebox.showinfo("Узел найден", "Нашёл узел, который ответил на HTTPS-проверку через твою сеть. Сейчас попробую подключить его.\n\nЭто публичный сторонний сервер; стабильность не гарантируется.")
+        self._save_state()
+        messagebox.showinfo(
+            "Узел найден",
+            f"Профиль прошёл HTTPS-проверку через твою сеть ({candidate_kind}). Сейчас запускаю подключение.\n\n"
+            "Публичные сторонние узлы нестабильны и не подходят для важных аккаунтов."
+        )
         self.root.after(150, self.connect)
 
     def _auto_find_failed(self, error):
@@ -1368,7 +1382,7 @@ class CheburekApp:
             ):
                 self.restart_as_admin()
             return
-        raw = self.editor.get("1.0", "end").strip()
+        raw = AUTO_PROFILE_TOKEN if getattr(self, "auto_profile_active", False) else self.editor.get("1.0", "end").strip()
         selected = [name for name, var in self.service_vars.items() if var.get()]
         custom_domains = self.custom_entry.get().strip()
         if not selected and not custom_domains and mode != "Весь трафик (TUN)":
@@ -1436,7 +1450,13 @@ class CheburekApp:
 
     def _connect_worker(self, raw, selected, custom_domains, mode, use_system_proxy):
         try:
-            data, already_json = parse_uri(raw)
+            if raw == AUTO_PROFILE_TOKEN:
+                if not AUTO_PROFILE_PATH.is_file():
+                    raise ValueError("Автоматический JSON-профиль не найден. Нажми «Автоподбор узла» ещё раз.")
+                data = json.loads(AUTO_PROFILE_PATH.read_text(encoding="utf-8"))
+                already_json = True
+            else:
+                data, already_json = parse_uri(raw)
             config = make_routing_config(data, selected, custom_domains, mode)
             CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
             check = subprocess.run([str(CORE), "check", "-c", str(CONFIG_PATH)],
